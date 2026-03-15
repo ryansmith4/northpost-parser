@@ -1,0 +1,79 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**NorthPost Parser** — Canadian postal address parser library built with **ANTLR4** grammars. Parses free-form Canadian address text (English and French) into structured components (addressee, street, municipality, province, postal code, etc.). Pure Java library with no framework dependencies.
+
+## Build & Test Commands
+
+```bash
+./gradlew build                    # Build (includes ANTLR code generation)
+./gradlew test                     # Run all tests
+./gradlew generateGrammarSource    # Regenerate ANTLR parser/lexer from .g4 grammars
+./gradlew test --tests "com.guidedbyte.address.AddressParserTest"           # Run a single test class
+./gradlew test --tests "com.guidedbyte.address.AddressParserTest.CivicAddressTests.shouldParseCompleteCivicAddress"  # Run a single test method (nested class syntax)
+./gradlew cleanTest test -PodaBulk -PodaBulkOnly                  # ODA bulk validation (all provinces)
+./gradlew cleanTest test -PodaBulk -PodaBulkOnly -PodaProvinces=BC # ODA bulk validation (specific province)
+```
+
+Java 21 required. Gradle 9.4.0 (wrapper included).
+
+## Architecture
+
+### Grammar (`CanadianAddress.g4`)
+- Uses `NL` (newline) to separate address lines and `WS` (spaces/tabs only) within lines
+- `WORD` token handles accented characters (`\u00C0-\u00FF`, `\u0100-\u017F`), hyphens, apostrophes, dots within words
+- `CATCHALL` rule (`. -> skip`) silently discards unrecognized characters (parentheses, etc.)
+- Minimal lexer — produces structural tokens (WORD, NUMBER, POSTAL_CODE, etc.); all semantic interpretation is in the visitor
+
+### Visitor (`AddressComponentVisitor`)
+- Comprehensive street type lookup tables for EN and FR
+- French type-first disambiguation (Rule 3: e.g., "RUE PRINCIPALE" vs "123 RUE DES ÉRABLES")
+- Direction detection (EN and FR including EST, OUEST, NORD, SUD)
+- Province name normalization — full names ("ONTARIO"), informal abbreviations ("ONT.", "B.C."), and 2-letter codes
+- Handles informal patterns: fractional street numbers (123 1/2), dual civics (123/125), concatenated units (APT5), trailing units (123 MAIN ST APT 5), postal code on own line, comma-separated single-line addresses
+
+### Service (`AddressParserService`)
+- Plain Java class — instantiate directly with `new AddressParserService()`
+- Normalizes input to uppercase before parsing
+- `ParsingStrategy` enum: `LENIENT` (always succeeds), `STRICT` (rejects incomplete addresses), `STRICT_THEN_LENIENT` (tries strict, falls back to lenient)
+- Validated against 9.6M+ Statistics Canada ODA addresses with 100% parse success
+
+### Model (`AddressComponents`)
+- Immutable record with Builder. Fields are normalized to uppercase and null-safe (empty string)
+- `AddressType` enum: CIVIC, POSTAL_BOX, RURAL_ROUTE, GENERAL_DELIVERY, MIXED, INCOMPLETE
+- `ParsingMode` enum: STRICT, LENIENT
+
+### ANTLR Code Generation
+- Grammar file lives in `src/main/antlr/`
+- Generated code goes to `build/generated-src/antlr/main/com/guidedbyte/address/parser/`
+- Generated classes: `CanadianAddressLexer`, `CanadianAddressParser`, `CanadianAddressBaseVisitor`
+- `compileJava` depends on `generateGrammarSource` — grammar changes are picked up automatically on build
+
+## Testing
+
+- JUnit 5 with AssertJ assertions
+- Tests instantiate services directly (no framework context)
+- `AddressParserTest` — unit tests for parser service (civic, French, PO box, rural, general delivery, strict/lenient strategies)
+- `OdaAddressTest` — parameterized test using 147 curated addresses from `oda_test_addresses.csv` (pipe-delimited, `\n` literals for line breaks)
+
+### ODA Bulk Validation
+
+Bulk test (`OdaBulkValidationTest`) validates the parser against full Statistics Canada ODA datasets. Tagged `oda-bulk`, excluded from normal builds.
+
+```bash
+# Run against all ODA zips in oda-data/
+./gradlew cleanTest test -PodaBulk -PodaBulkOnly
+
+# Run against specific province(s)
+./gradlew cleanTest test -PodaBulk -PodaBulkOnly -PodaProvinces=BC,QC
+```
+
+**Setup:** Download ODA zip files from [Statistics Canada ODA](https://www.statcan.gc.ca/en/lode/databases/oda) and place in `oda-data/` (gitignored). The test reads CSVs directly from the zip files — no unzipping needed. Reports are written to `build/reports/oda-bulk/ODA_XX_report.txt`.
+
+## Key Dependencies
+
+- ANTLR 4.13.1 (grammar + runtime)
+- SLF4J 2.0.9 for logging (consumers provide their own implementation)

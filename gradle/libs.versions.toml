@@ -1,0 +1,23 @@
+[versions]
+antlr = "4.13.2"
+slf4j = "2.0.17"
+junit = "6.0.3"
+assertj = "3.27.7"
+logback = "1.5.32"
+spotless = "8.3.0"
+qodana = "2025.3.1"
+palantir-java-format = "2.89.0"
+
+[libraries]
+antlr = { group = "org.antlr", name = "antlr4", version.ref = "antlr" }
+antlr-runtime = { group = "org.antlr", name = "antlr4-runtime", version.ref = "antlr" }
+slf4j-api = { group = "org.slf4j", name = "slf4j-api", version.ref = "slf4j" }
+junit-jupiter = { group = "org.junit.jupiter", name = "junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher" }
+assertj-core = { group = "org.assertj", name = "assertj-core", version.ref = "assertj" }
+logback-classic = { group = "ch.qos.logback", name = "logback-classic", version.ref = "logback" }
+
+[plugins]
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+qodana = { id = "org.jetbrains.qodana", version.ref = "qodana" }
+maven-publish = { id = "com.vanniktech.maven.publish", version = "0.36.0" }

@@ -1,0 +1,162 @@
+plugins {
+    id 'java-library'
+    id 'antlr'
+    id 'idea'
+    id 'eclipse'
+    alias libs.plugins.spotless
+    alias libs.plugins.qodana
+    alias libs.plugins.maven.publish
+}
+
+group = 'com.guidedbyte'
+version = '1.0.0-SNAPSHOT'
+description = 'Canadian postal address parser library'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // ANTLR
+    antlr libs.antlr
+    api libs.antlr.runtime
+
+    // Logging (API only — consumers provide the implementation)
+    api libs.slf4j.api
+
+    // Test
+    testImplementation libs.junit.jupiter
+    testRuntimeOnly libs.junit.platform.launcher
+    testImplementation libs.assertj.core
+    testRuntimeOnly libs.logback.classic
+}
+
+// ANTLR configuration
+generateGrammarSource {
+    maxHeapSize = "64m"
+    arguments += ["-visitor", "-long-messages"]
+    packageName = "com.guidedbyte.address.parser"
+    outputDirectory = layout.buildDirectory.dir("generated-src/antlr/main/com/guidedbyte/address/parser").get().asFile
+}
+
+compileJava.dependsOn generateGrammarSource
+tasks.configureEach { task ->
+    if (task.name == 'sourcesJar') {
+        task.dependsOn generateGrammarSource
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs += layout.buildDirectory.dir("generated-src/antlr/main").get().asFile
+        }
+    }
+}
+
+if (plugins.hasPlugin('idea')) {
+    idea {
+        module {
+            generatedSourceDirs += layout.buildDirectory.dir("generated-src/antlr/main").get().asFile
+        }
+    }
+}
+
+if (plugins.hasPlugin('eclipse')) {
+    eclipse {
+        classpath {
+            file {
+                beforeMerged { classpath ->
+                    classpath.entries.add(new org.gradle.plugins.ide.eclipse.model.SourceFolder("build/generated-src/antlr/main", null))
+                }
+            }
+        }
+    }
+}
+
+test {
+    useJUnitPlatform {
+        if (!project.hasProperty('odaBulk')) {
+            excludeTags 'oda-bulk'
+        } else if (project.hasProperty('odaBulkOnly')) {
+            includeTags 'oda-bulk'
+        }
+    }
+    if (project.hasProperty('odaBulk')) {
+        systemProperty 'oda.provinces', project.findProperty('odaProvinces') ?: ''
+    }
+}
+
+compileJava {
+    options.release = 21
+}
+
+compileTestJava {
+    options.release = 21
+}
+
+// Maven Central publishing
+mavenPublishing {
+    publishToMavenCentral()
+    signAllPublications()
+
+    pom {
+        name = 'NorthPost Parser'
+        description = 'Canadian postal address parser library built with ANTLR4'
+        inceptionYear = '2025'
+        url = 'https://github.com/ryansmith4/northpost-parser/'
+
+        licenses {
+            license {
+                name = 'The Apache License, Version 2.0'
+                url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                distribution = 'repo'
+            }
+        }
+
+        developers {
+            developer {
+                id = 'ryansmith4'
+                name = 'Ryan Smith'
+                url = 'https://github.com/ryansmith4/'
+            }
+        }
+
+        scm {
+            url = 'https://github.com/ryansmith4/northpost-parser/'
+            connection = 'scm:git:git://github.com/ryansmith4/northpost-parser.git'
+            developerConnection = 'scm:git:ssh://git@github.com/ryansmith4/northpost-parser.git'
+        }
+    }
+}
+
+// Spotless code formatting
+spotless {
+    java {
+        target 'src/**/*.java'
+        palantirJavaFormat(libs.versions.palantir.java.format.get()).formatJavadoc(true)
+        removeUnusedImports()
+    }
+}
+
+// Qodana configuration
+qodana {
+    projectPath.set(projectDir.path)
+    resultsPath.set(layout.buildDirectory.dir("qodana/results").get().asFile.path)
+    cachePath.set(layout.buildDirectory.dir("qodana/cache").get().asFile.path)
+}
+
+tasks.named("qodanaScan") {
+    (it as org.jetbrains.qodana.tasks.QodanaScanTask).arguments.set(
+        [
+            "--linter", "qodana-jvm-community",
+            "--within-docker=false",
+        ],
+    )
+}

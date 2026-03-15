@@ -1,0 +1,11 @@
+version: "1.0"
+
+linter: qodana-jvm-community
+
+profile:
+  name: qodana.recommended
+
+include:
+  - name: unused
+
+failThreshold: 1000
