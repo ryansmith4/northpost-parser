@@ -21,3 +21,4 @@ logback-classic = { group = "ch.qos.logback", name = "logback-classic", version.
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 qodana = { id = "org.jetbrains.qodana", version.ref = "qodana" }
 maven-publish = { id = "com.vanniktech.maven.publish", version = "0.36.0" }
+axion-release = { id = "pl.allegro.tech.build.axion-release", version = "1.21.1" }
