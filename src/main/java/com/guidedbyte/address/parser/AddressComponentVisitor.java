@@ -350,12 +350,17 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         return null;
     }
 
-    /** Directional indicators (English and French) */
+    /** Short directional abbreviations safe to treat as prefix directions (e.g., "N MAIN ST") */
+    private static final Set<String> PREFIX_DIRECTIONS =
+            Set.of("N", "S", "E", "W", "O", "NE", "NW", "SE", "SW", "N.", "S.", "E.", "W.");
+
+    /** Directional indicators (English and French) — full set for suffix detection */
     private static final Set<String> DIRECTIONS = Set.of(
             "N",
             "S",
             "E",
             "W",
+            "O",
             "NE",
             "NW",
             "SE",
@@ -962,13 +967,23 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         if (words.isEmpty()) return;
 
-        // Check if last word is a direction
-        String lastWord = words.get(words.size() - 1).toUpperCase();
+        // Check for prefix direction (e.g., "N MAIN ST", "S WESTSIDE RD")
+        // Only short abbreviations are treated as prefix — full words like NORTH could be street names
         String direction = null;
-        if (DIRECTIONS.contains(lastWord) && words.size() > 1) {
-            direction = lastWord;
-            words.remove(words.size() - 1);
-            wordIndices.remove(wordIndices.size() - 1);
+        if (words.size() > 1 && PREFIX_DIRECTIONS.contains(words.get(0).toUpperCase())) {
+            direction = words.get(0).toUpperCase();
+            words.remove(0);
+            wordIndices.remove(0);
+        }
+
+        // Check if last word is a direction (suffix, e.g., "MAIN ST N")
+        if (direction == null && words.size() > 1) {
+            String lastWord = words.get(words.size() - 1).toUpperCase();
+            if (DIRECTIONS.contains(lastWord)) {
+                direction = lastWord;
+                words.remove(words.size() - 1);
+                wordIndices.remove(wordIndices.size() - 1);
+            }
         }
 
         // Plan 5: Detect trailing unit after street type (e.g., "MAIN ST APT 5")
@@ -1135,12 +1150,20 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         if (words.isEmpty()) return;
 
-        // Check last word for direction
+        // Check for prefix direction (e.g., "N MAIN ST")
         String direction = null;
-        String lastWord = words.get(words.size() - 1).toUpperCase();
-        if (DIRECTIONS.contains(lastWord) && words.size() > 1) {
-            direction = lastWord;
-            words.remove(words.size() - 1);
+        if (words.size() > 1 && DIRECTIONS.contains(words.get(0).toUpperCase())) {
+            direction = words.get(0).toUpperCase();
+            words.remove(0);
+        }
+
+        // Check last word for suffix direction (e.g., "MAIN ST N")
+        if (direction == null && words.size() > 1) {
+            String lastWord = words.get(words.size() - 1).toUpperCase();
+            if (DIRECTIONS.contains(lastWord)) {
+                direction = lastWord;
+                words.remove(words.size() - 1);
+            }
         }
 
         // Use shared disambiguation logic
