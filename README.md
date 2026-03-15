@@ -206,9 +206,9 @@ Validated against 9,603,114 addresses across 10 provinces/territories from the S
 | Postal code | **99.78%** | 556,943 | Mismatches are malformed codes in ODA data |
 | City | **99.49%** | 9,279,034 | ODA uses underscores in multi-word names |
 | Street number | **99.13%** | 9,603,114 | ODA includes parentheses/annotations the parser strips |
-| Street direction | **95.38%** | 767,869 | Remaining gap is abbreviation normalization (O vs OUEST) |
-| Street type | **94.88%** | 5,547,130 | Abbreviation normalization differences |
-| Street name | **92.43%** | 6,076,730 | Ordinal form differences (ODA: "TWELFTH", input: "12TH") |
+| Street type | **96.49%** | 5,547,130 | Remaining gap is normalization (full vs abbreviated forms) |
+| Street direction | **95.67%** | 767,869 | Remaining gap is normalization (O vs OUEST, E vs EAST) |
+| Street name | **93.83%** | 6,076,730 | Ordinal forms and French linking particle differences |
 
 **Important context:** Many reported "mismatches" are normalization differences between the ODA ground truth and the parser's output, not parsing errors. For example:
 - **Street number**: ODA records `(3195)`, parser correctly extracts `3195`
