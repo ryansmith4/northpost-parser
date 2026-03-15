@@ -92,20 +92,32 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "HY",
             "CLOSE",
             "CL",
+            "CLO",
             "GATE",
             "GT",
+            "GA",
             "GREEN",
             "GR",
+            "GRN",
             "GROVE",
+            "GV",
+            "GRV",
             "HEATH",
+            "HE",
             "HEIGHTS",
             "HTS",
+            "HT",
             "HILL",
+            "HL",
             "LANDING",
+            "LANDNG",
+            "LD",
             "MEWS",
+            "MS",
             "PARADE",
             "PARK",
             "PK",
+            "PA",
             "PATH",
             "POINT",
             "PT",
@@ -114,23 +126,34 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "SQUARE",
             "SQ",
             "WALK",
+            "WK",
             "ABBEY",
             "ACRES",
             "ALLEY",
             "BAY",
+            "BA",
             "BEACH",
             "BEND",
+            "BRANCH",
+            "BR",
             "BYPASS",
             "BYWAY",
             "CAPE",
             "CENTRE",
             "CHASE",
+            "CIRCUIT",
+            "CIRC",
             "COMMON",
+            "CM",
             "CONCESSION",
+            "CON",
             "CORNERS",
             "COVE",
+            "CO",
+            "CV",
             "CREEK",
             "CRK",
+            "CROSS",
             "CROSSING",
             "XG",
             "CDS",
@@ -142,17 +165,24 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "ESPLANADE",
             "ESPL",
             "ESTATES",
+            "ESTS",
             "EXTENSION",
+            "EXTEN",
             "FAIRWAY",
             "FARM",
             "FIELD",
             "FORD",
             "FOREST",
+            "FREEWAY",
+            "FWY",
             "FRONT",
+            "GARDEN",
             "GARDENS",
             "GDNS",
+            "GDN",
             "GLADE",
             "GLEN",
+            "GRANGE",
             "HARBOUR",
             "HAVEN",
             "HOLLOW",
@@ -163,24 +193,33 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "KNOLL",
             "LIMITS",
             "LINE",
+            "LI",
             "LINK",
             "LOOKOUT",
+            "LKOUT",
             "LOOP",
             "MALL",
             "MANOR",
+            "MR",
             "MAZE",
+            "ME",
             "MEADOW",
+            "MEADOWS",
             "MOUNT",
+            "MT",
             "MOUNTAIN",
+            "MTN",
             "ORCHARD",
             "PARKLAND",
             "PASSAGE",
+            "PASS",
             "PINES",
             "PLATEAU",
             "PLAZA",
             "PORT",
             "PRIVATE",
             "PVT",
+            "PR",
             "PROMENADE",
             "PROM",
             "QUAY",
@@ -190,24 +229,36 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "REACH",
             "RISE",
             "RI",
+            "RO",
             "RUN",
+            "SHORE",
             "SHORES",
             "SHORELINE",
+            "SIDEROAD",
+            "SDRD",
+            "SR",
             "SPRING",
             "STROLL",
+            "TC",
+            "TE",
             "THICKET",
             "TOWERS",
             "TOWNLINE",
+            "TL",
             "TRUNK",
+            "TR",
             "TUNNEL",
             "TURNABOUT",
             "VALE",
             "VIEW",
+            "VW",
+            "VI",
             "VILLAGE",
             "VILLAS",
             "VISTA",
             "WHARF",
             "WOOD",
+            "WOODS",
             "WYND");
 
     /** Common French street type abbreviations and full names */
@@ -218,8 +269,10 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "AV",
             "BOULEVARD",
             "BOUL",
+            "BL",
             "CHEMIN",
             "CH",
+            "CMN",
             "ROUTE",
             "RTE",
             "PLACE",
@@ -234,15 +287,22 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "PASSAGE",
             "PROMENADE",
             "TERRASSE",
+            "TSSE",
             "ALLÉE",
             "ALLEE",
             "CARRÉ",
             "CARRE",
+            "CAR",
             "CERCLE",
+            "CIRCUIT",
             "COUR",
             "COURS",
+            "CRÊTE",
+            "CRETE",
             "PARC",
+            "PONT",
             "SENTIER",
+            "TUNNEL",
             "VOIE",
             "RUELLE",
             "AUTOROUTE",
@@ -350,16 +410,25 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         return null;
     }
 
-    /** Directional indicators (English and French) */
+    /** Short directional abbreviations safe to treat as prefix directions (e.g., "N MAIN ST") */
+    private static final Set<String> PREFIX_DIRECTIONS =
+            Set.of("N", "S", "E", "W", "O", "NE", "NW", "SE", "SW", "N.", "S.", "E.", "W.");
+
+    /** Directional indicators (English and French) — full set for suffix detection */
     private static final Set<String> DIRECTIONS = Set.of(
             "N",
             "S",
             "E",
             "W",
+            "O",
             "NE",
             "NW",
             "SE",
             "SW",
+            "NB",
+            "SB",
+            "EB",
+            "WB",
             "NORTH",
             "SOUTH",
             "EAST",
@@ -368,6 +437,10 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "NORTHWEST",
             "SOUTHEAST",
             "SOUTHWEST",
+            "NORTHBOUND",
+            "SOUTHBOUND",
+            "EASTBOUND",
+            "WESTBOUND",
             "N.",
             "S.",
             "E.",
@@ -962,13 +1035,23 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         if (words.isEmpty()) return;
 
-        // Check if last word is a direction
-        String lastWord = words.get(words.size() - 1).toUpperCase();
+        // Check for prefix direction (e.g., "N MAIN ST", "S WESTSIDE RD")
+        // Only short abbreviations are treated as prefix — full words like NORTH could be street names
         String direction = null;
-        if (DIRECTIONS.contains(lastWord) && words.size() > 1) {
-            direction = lastWord;
-            words.remove(words.size() - 1);
-            wordIndices.remove(wordIndices.size() - 1);
+        if (words.size() > 1 && PREFIX_DIRECTIONS.contains(words.get(0).toUpperCase())) {
+            direction = words.get(0).toUpperCase();
+            words.remove(0);
+            wordIndices.remove(0);
+        }
+
+        // Check if last word is a direction (suffix, e.g., "MAIN ST N")
+        if (direction == null && words.size() > 1) {
+            String lastWord = words.get(words.size() - 1).toUpperCase();
+            if (DIRECTIONS.contains(lastWord)) {
+                direction = lastWord;
+                words.remove(words.size() - 1);
+                wordIndices.remove(wordIndices.size() - 1);
+            }
         }
 
         // Plan 5: Detect trailing unit after street type (e.g., "MAIN ST APT 5")
@@ -1114,6 +1197,16 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             return;
         }
 
+        // ---- Mid-name direction (e.g., "VICTORIA E ST", "KING W ST") ----
+        // If the word before the type is a short direction and there's still a name before it,
+        // extract the direction and exclude it from the name.
+        if (words.size() >= 3 && DIRECTIONS.contains(precedingWord)) {
+            builder.streetType(normalizedLast);
+            builder.streetDirection(precedingWord);
+            builder.streetName(String.join(" ", words.subList(0, words.size() - 2)));
+            return;
+        }
+
         // ---- Rule 2 / Default: standard English pattern ----
         // Last word is the type, everything before is the name.
         // This also covers two consecutive street types (e.g., "PARK DRIVE"),
@@ -1135,12 +1228,20 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         if (words.isEmpty()) return;
 
-        // Check last word for direction
+        // Check for prefix direction (e.g., "N MAIN ST")
         String direction = null;
-        String lastWord = words.get(words.size() - 1).toUpperCase();
-        if (DIRECTIONS.contains(lastWord) && words.size() > 1) {
-            direction = lastWord;
-            words.remove(words.size() - 1);
+        if (words.size() > 1 && DIRECTIONS.contains(words.get(0).toUpperCase())) {
+            direction = words.get(0).toUpperCase();
+            words.remove(0);
+        }
+
+        // Check last word for suffix direction (e.g., "MAIN ST N")
+        if (direction == null && words.size() > 1) {
+            String lastWord = words.get(words.size() - 1).toUpperCase();
+            if (DIRECTIONS.contains(lastWord)) {
+                direction = lastWord;
+                words.remove(words.size() - 1);
+            }
         }
 
         // Use shared disambiguation logic
