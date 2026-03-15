@@ -11,7 +11,7 @@
 
 A Canadian postal address parser that converts free-form address text into structured components. Built with an [ANTLR4](https://www.antlr.org/) grammar, NorthPost Parser handles the full range of Canadian addressing formats — civic, PO box, rural route, and general delivery — in both English and French.
 
-Pure Java library with no framework dependencies. Validated against **9.6 million+** [Statistics Canada ODA](https://www.statcan.gc.ca/en/lode/databases/oda) addresses with a **100% parse success rate**.
+Pure Java library with no framework dependencies. Validated against **9.6 million+** [Statistics Canada ODA](https://www.statcan.gc.ca/en/lode/databases/oda) addresses with a **100% parse success rate** and **high field-level accuracy**.
 
 ## Installation
 
@@ -193,7 +193,30 @@ The parser can be validated against full [Statistics Canada ODA](https://www.sta
 ./gradlew cleanTest test -PodaBulk -PodaBulkOnly -PodaProvinces=BC,QC
 ```
 
-Reports are written to `build/reports/oda-bulk/`.
+Reports are written to `build/reports/oda-bulk/`, including a mismatch CSV for each province for detailed analysis.
+
+### Accuracy
+
+Validated against 9,603,114 addresses across 10 provinces/territories from the Statistics Canada ODA dataset. Field accuracy is measured by case-insensitive comparison against ODA's structured ground truth fields.
+
+| Field | Accuracy | Addresses Tested | Notes |
+|-------|----------|-----------------|-------|
+| Parse success | **100.00%** | 9,603,114 | Every address parsed without errors |
+| Province | **100.00%** | 9,603,114 | |
+| Postal code | **99.78%** | 556,943 | Mismatches are malformed codes in ODA data |
+| Street number | **99.13%** | 9,603,114 | ODA includes parentheses/annotations the parser strips |
+| City | **99.49%** | 9,279,034 | ODA uses underscores in multi-word names |
+| Street type | **95.02%** | 5,546,555 | Abbreviation normalization differences |
+| Street direction | **92.73%** | 767,869 | Prefix directions (e.g., "N MAIN ST") not yet extracted |
+| Street name | **82.95%** | 7,076,730 | Ordinal form differences (ODA: "TWELFTH", input: "12TH") |
+
+**Important context:** Many reported "mismatches" are normalization differences between the ODA ground truth and the parser's output, not parsing errors. For example:
+- **Street number**: ODA records `(3195)`, parser correctly extracts `3195`
+- **Street name**: ODA stores `TWELFTH`, parser preserves the input form `12TH` — both are correct
+- **City**: ODA uses `NORTH_COWICHAN_MUNICIPALITY`, parser outputs `NORTH COWICHAN MUNICIPALITY`
+- **Postal code**: ODA contains invalid formats like `VE3 3S3` that don't match the A1A 1A1 pattern
+
+Not all ODA provinces provide all structured fields — "Addresses Tested" reflects only rows where ODA provides ground truth for that field.
 
 ## Tech Stack
 

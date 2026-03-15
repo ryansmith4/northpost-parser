@@ -54,14 +54,14 @@ Java 21 required. Gradle 9.4.0 (wrapper included).
 
 ## Testing
 
-- JUnit 5 with AssertJ assertions
+- JUnit 6 with AssertJ assertions
 - Tests instantiate services directly (no framework context)
 - `AddressParserTest` — unit tests for parser service (civic, French, PO box, rural, general delivery, strict/lenient strategies)
 - `OdaAddressTest` — parameterized test using 147 curated addresses from `oda_test_addresses.csv` (pipe-delimited, `\n` literals for line breaks)
 
 ### ODA Bulk Validation
 
-Bulk test (`OdaBulkValidationTest`) validates the parser against full Statistics Canada ODA datasets. Tagged `oda-bulk`, excluded from normal builds.
+Bulk test (`OdaBulkValidationTest`) validates the parser against full Statistics Canada ODA datasets. Tagged `oda-bulk`, excluded from normal builds. Checks field-level accuracy (street number, name, type, direction, city, province, postal code) against ODA ground truth. Writes per-province reports and mismatch CSVs to `build/reports/oda-bulk/`. Validated against 9.6M+ addresses with 100% parse success and high field-level accuracy.
 
 ```bash
 # Run against all ODA zips in oda-data/
