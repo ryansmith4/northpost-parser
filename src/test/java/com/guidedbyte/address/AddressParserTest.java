@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.guidedbyte.address.model.AddressComponents;
 import com.guidedbyte.address.model.AddressComponents.AddressType;
 import com.guidedbyte.address.model.AddressComponents.ParsingMode;
+import com.guidedbyte.address.model.NormalizationStrategy;
 import com.guidedbyte.address.service.AddressParserService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -824,6 +825,97 @@ class AddressParserTest {
 
             System.out.printf(
                     "Parsed 1000 addresses in %d ms (%.2f ms per address)%n", duration, (double) duration / 1000);
+        }
+    }
+
+    @Nested
+    @DisplayName("Normalization")
+    class NormalizationTests {
+
+        @Test
+        @DisplayName("should normalize street type to full form")
+        void shouldNormalizeStreetTypeToFullForm() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nTORONTO ON M5V 2Y7");
+            var normalized = result.components().normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.streetType()).isEqualTo("STREET");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("should normalize street type to abbreviated form")
+        void shouldNormalizeStreetTypeToAbbreviated() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN STREET\nTORONTO ON M5V 2Y7");
+            var normalized = result.components().normalize(NormalizationStrategy.ABBREVIATED);
+            assertThat(normalized.streetType()).isEqualTo("ST");
+            assertThat(result.components().streetType()).isEqualTo("STREET");
+        }
+
+        @Test
+        @DisplayName("should normalize direction to full form")
+        void shouldNormalizeDirectionToFullForm() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST N\nTORONTO ON M5V 2Y7");
+            var normalized = result.components().normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.streetDirection()).isEqualTo("NORTH");
+            assertThat(result.components().streetDirection()).isEqualTo("N");
+        }
+
+        @Test
+        @DisplayName("should normalize direction to abbreviated form")
+        void shouldNormalizeDirectionToAbbreviated() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST NORTH\nTORONTO ON M5V 2Y7");
+            var normalized = result.components().normalize(NormalizationStrategy.ABBREVIATED);
+            assertThat(normalized.streetDirection()).isEqualTo("N");
+            assertThat(result.components().streetDirection()).isEqualTo("NORTH");
+        }
+
+        @Test
+        @DisplayName("should normalize French street type to full form")
+        void shouldNormalizeFrenchStreetType() {
+            var result = parser.parseAddress("JEAN DUPONT\n123 BOUL DES ÉRABLES\nMONTRÉAL QC H2X 1Y4");
+            var normalized = result.components().normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.streetType()).isEqualTo("BOULEVARD");
+        }
+
+        @Test
+        @DisplayName("should normalize French direction O to full form")
+        void shouldNormalizeFrenchDirectionO() {
+            var result = parser.parseAddress("JEAN DUPONT\n123 RUE PRINCIPALE O\nMONTRÉAL QC H2X 1Y4");
+            var normalized = result.components().normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.streetDirection()).isEqualTo("OUEST");
+        }
+
+        @Test
+        @DisplayName("should preserve non-type fields unchanged")
+        void shouldPreserveOtherFields() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST N\nTORONTO ON M5V 2Y7");
+            var normalized = result.components().normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.addressee()).isEqualTo("JOHN SMITH");
+            assertThat(normalized.streetNumber()).isEqualTo("123");
+            assertThat(normalized.streetName()).isEqualTo("MAIN");
+            assertThat(normalized.municipality()).isEqualTo("TORONTO");
+            assertThat(normalized.province()).isEqualTo("ON");
+            assertThat(normalized.postalCode()).isEqualTo("M5V 2Y7");
+        }
+
+        @Test
+        @DisplayName("should leave unknown types unchanged")
+        void shouldLeaveUnknownTypesUnchanged() {
+            var components = AddressComponents.builder()
+                    .streetType("UNKNOWNTYPE")
+                    .streetDirection("XYZ")
+                    .build();
+            var normalized = components.normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.streetType()).isEqualTo("UNKNOWNTYPE");
+            assertThat(normalized.streetDirection()).isEqualTo("XYZ");
+        }
+
+        @Test
+        @DisplayName("should handle empty components gracefully")
+        void shouldHandleEmptyComponents() {
+            var components = AddressComponents.builder().build();
+            var normalized = components.normalize(NormalizationStrategy.FULL_FORM);
+            assertThat(normalized.streetType()).isEmpty();
+            assertThat(normalized.streetDirection()).isEmpty();
         }
     }
 }
