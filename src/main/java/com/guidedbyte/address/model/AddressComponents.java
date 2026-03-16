@@ -334,6 +334,44 @@ public record AddressComponents(
         return sb.toString().trim();
     }
 
+    /**
+     * Returns a new AddressComponents with street type and direction normalized to canonical forms.
+     *
+     * <p>The parser preserves input forms by default. Use this method to convert to a consistent canonical form for
+     * address matching, deduplication, or storage.
+     *
+     * <p>Example:
+     *
+     * <pre>
+     *   var normalized = components.normalize(NormalizationStrategy.FULL_FORM);
+     *   normalized.streetType();      // "BOULEVARD" (was "BLVD")
+     *   normalized.streetDirection(); // "NORTH" (was "N")
+     * </pre>
+     *
+     * @param strategy the normalization strategy to apply
+     * @return a new AddressComponents with normalized street type and direction
+     */
+    public AddressComponents normalize(NormalizationStrategy strategy) {
+        return new AddressComponents(
+                addressee,
+                careOf,
+                unitNumber,
+                streetNumber,
+                streetName,
+                AddressNormalizer.normalizeStreetType(streetType, strategy),
+                AddressNormalizer.normalizeDirection(streetDirection, strategy),
+                postalBoxNumber,
+                ruralRoute,
+                siteInfo,
+                municipality,
+                province,
+                postalCode,
+                country,
+                addressType,
+                parsingMode,
+                isComplete);
+    }
+
     /** Validates that the address has minimum required components for mailing */
     public boolean isMailingValid() {
         return hasAddressee()
