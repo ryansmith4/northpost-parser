@@ -15,18 +15,16 @@ Pure Java library with no framework dependencies. Validated against **9.6 millio
 
 ## Installation
 
-Replace `VERSION` with the latest release shown in the Maven Central badge above.
-
 ### Gradle
 
 ```groovy
-implementation 'com.guidedbyte:northpost-parser:VERSION'
+implementation 'com.guidedbyte:northpost-parser:1.0.0'
 ```
 
 Kotlin DSL:
 
 ```kotlin
-implementation("com.guidedbyte:northpost-parser:VERSION")
+implementation("com.guidedbyte:northpost-parser:1.0.0")
 ```
 
 ### Maven
@@ -35,7 +33,7 @@ implementation("com.guidedbyte:northpost-parser:VERSION")
 <dependency>
     <groupId>com.guidedbyte</groupId>
     <artifactId>northpost-parser</artifactId>
-    <version>VERSION</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
