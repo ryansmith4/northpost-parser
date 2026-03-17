@@ -622,8 +622,14 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 interpretDeliveryLine(parsedLines.get(i));
             }
         } else {
-            // First line → addressee
-            interpretAddresseeLine(parsedLines.get(0));
+            // First line → addressee (unless it looks like a delivery line in a 2-line address)
+            int deliveryStartIndex = 1;
+            if (parsedLines.size() == 2 && looksLikeDeliveryLine(parsedLines.get(0).tokens)) {
+                // No addressee — first line is delivery, second is region
+                deliveryStartIndex = 0;
+            } else {
+                interpretAddresseeLine(parsedLines.get(0));
+            }
 
             // Last line → region (municipality/province/postal code)
             // But check if the last line is a country line, and the second-to-last is the region
@@ -647,7 +653,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             interpretRegionLine(parsedLines.get(regionLineIndex));
 
             // Middle lines → delivery information
-            for (int i = 1; i < regionLineIndex; i++) {
+            for (int i = deliveryStartIndex; i < regionLineIndex; i++) {
                 interpretDeliveryLine(parsedLines.get(i));
             }
         }
@@ -1468,6 +1474,31 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     private boolean isCountryLine(LineTokens line) {
         return line.tokens.size() == 1
                 && COUNTRY_KEYWORDS.contains(line.tokens.get(0).text.toUpperCase());
+    }
+
+    private boolean looksLikeDeliveryLine(List<TokenInfo> tokens) {
+        if (tokens.isEmpty()) return false;
+        TokenInfo first = tokens.get(0);
+        // Starts with a number → likely a civic address (e.g., "123 MAIN ST")
+        if (first.type == CanadianAddressParser.NUMBER || first.type == CanadianAddressParser.ALPHANUMERIC) {
+            return true;
+        }
+        String firstText = first.text.toUpperCase();
+        // Starts with PO Box, RR, GD, or unit designator → delivery line
+        if (PO_BOX_KEYWORDS.contains(firstText) || firstText.equals("RR") || firstText.equals("GD")) {
+            return true;
+        }
+        if (isUnitDesignator(firstText)) {
+            return true;
+        }
+        // Starts with a short prefix direction followed by a number → likely "N 123 MAIN ST"
+        if (tokens.size() >= 2
+                && PREFIX_DIRECTIONS.contains(firstText)
+                && (tokens.get(1).type == CanadianAddressParser.NUMBER
+                        || tokens.get(1).type == CanadianAddressParser.ALPHANUMERIC)) {
+            return true;
+        }
+        return false;
     }
 
     private boolean looksLikeStreetLine(List<TokenInfo> tokens) {
