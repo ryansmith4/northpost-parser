@@ -45,6 +45,7 @@ out/
 .qodana-token
 build/qodana/
 
-### ODA bulk validation data (large, not ours to distribute) ###
+### Bulk validation data (large, not ours to distribute) ###
 oda-data/
+nar-data/
 src/test/resources/ODA_*/

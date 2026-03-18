@@ -13,15 +13,34 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The v3 grammar is deliberately minimal — the lexer only produces structural tokens (WORD, NUMBER, POSTAL_CODE,
  * ALPHANUMERIC, punctuation). All semantic interpretation happens here in the visitor using lookup tables and
- * positional heuristics.
+ * anchor-based classification.
  *
- * <p>Line interpretation strategy (Canada Post addressing guidelines): - First line → addressee - Last line → region
- * (municipality / province / postal code) - Middle lines → delivery information (civic, PO box, rural route, care-of,
- * etc.)
+ * <p>Line interpretation strategy (anchor-based classification):
+ * <ul>
+ *   <li>Last line → region (municipality / province / postal code) — positional, per Canada Post convention
+ *   <li>Pre-region lines → classified by content anchors (delivery keywords, care-of markers, etc.)
+ *   <li>Lines with no recognizable anchors → addressee (first) or delivery (subsequent)
+ * </ul>
  */
 public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressComponents> {
 
     private static final Logger logger = LoggerFactory.getLogger(AddressComponentVisitor.class);
+
+    // ---- Anchor-based line classification ----
+
+    /** Role assigned to each address line based on content anchors */
+    private enum LineRole {
+        REGION,
+        DELIVERY,
+        CARE_OF,
+        SITE_INFO,
+        ADDRESSEE,
+        COUNTRY,
+        POSTAL_CODE_ONLY
+    }
+
+    /** A line paired with its classified role */
+    private record ClassifiedLine(LineTokens line, LineRole role) {}
 
     // ---- Lookup tables (updatable, not hardcoded in grammar) ----
 
@@ -259,7 +278,30 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "WHARF",
             "WOOD",
             "WOODS",
-            "WYND");
+            "WYND",
+            // v1.1.1: Common types and Calgary/Edmonton abbreviations
+            "PKWY",
+            "CREST",
+            "BLUFF",
+            "SPUR",
+            "ESTATE",
+            "GATEWAY",
+            "GY",
+            "WALKWAY",
+            "OUTLOOK",
+            "GD",
+            "CA",
+            "CX",
+            "PS",
+            "PZ",
+            "LP",
+            "AL",
+            "HI",
+            "GL",
+            "PW",
+            "CE",
+            "LK",
+            "GW");
 
     /** Common French street type abbreviations and full names */
     private static final Set<String> STREET_TYPES_FR = Set.of(
@@ -607,7 +649,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
         }
 
-        // Interpret lines positionally
+        // Interpret lines by classification
         if (commaSplit && parsedLines.size() == 1) {
             // Comma-split resolved to a region-only line (e.g., "ST. JOHN'S, NL A1A 1A1")
             interpretRegionLine(parsedLines.get(0));
@@ -622,26 +664,17 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 interpretDeliveryLine(parsedLines.get(i));
             }
         } else {
-            // First line → addressee (unless it looks like a delivery line in a 2-line address)
-            int deliveryStartIndex = 1;
-            if (parsedLines.size() == 2 && looksLikeDeliveryLine(parsedLines.get(0).tokens)) {
-                // No addressee — first line is delivery, second is region
-                deliveryStartIndex = 0;
-            } else {
-                interpretAddresseeLine(parsedLines.get(0));
-            }
-
-            // Last line → region (municipality/province/postal code)
-            // But check if the last line is a country line, and the second-to-last is the region
+            // ---- Phase 1: Region identification (last line, per Canada Post convention) ----
             int regionLineIndex = parsedLines.size() - 1;
-            if (parsedLines.size() >= 3 && isCountryLine(parsedLines.get(regionLineIndex))) {
+
+            // Peel country line from tail
+            if (isCountryLine(parsedLines.get(regionLineIndex))) {
                 builder.country(parsedLines.get(regionLineIndex).text);
                 regionLineIndex--;
             }
 
-            // Plan 3: If 4+ lines remain and the last line is ONLY a postal code,
-            // peel it off so the previous line becomes the region line.
-            if (regionLineIndex >= 3 && isPostalCodeOnlyLine(parsedLines.get(regionLineIndex))) {
+            // Peel postal-code-only line from tail
+            if (regionLineIndex >= 1 && isPostalCodeOnlyLine(parsedLines.get(regionLineIndex))) {
                 String pc = findPostalCode(parsedLines.get(regionLineIndex));
                 if (pc != null) {
                     builder.postalCode(pc);
@@ -650,11 +683,41 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 }
             }
 
+            // Last remaining line → region
             interpretRegionLine(parsedLines.get(regionLineIndex));
 
-            // Middle lines → delivery information
-            for (int i = deliveryStartIndex; i < regionLineIndex; i++) {
-                interpretDeliveryLine(parsedLines.get(i));
+            // ---- Phase 2: Classify pre-region lines by content anchors ----
+            List<ClassifiedLine> classified = new ArrayList<>();
+            for (int i = 0; i < regionLineIndex; i++) {
+                LineTokens line = parsedLines.get(i);
+                LineRole role = classifyLine(line);
+                classified.add(new ClassifiedLine(line, role));
+                logger.debug("Line {} classified as {}: '{}'", i, role, line.text);
+            }
+
+            // ---- Phase 3: Dispatch by classification ----
+            boolean addresseeSeen = false;
+            for (ClassifiedLine cl : classified) {
+                switch (cl.role()) {
+                    case DELIVERY -> interpretDeliveryLine(cl.line());
+                    case CARE_OF -> builder.careOf(extractAfterCareOf(cl.line().tokens));
+                    case SITE_INFO -> builder.siteInfo(cl.line().text);
+                    case COUNTRY -> builder.country(cl.line().text);
+                    case POSTAL_CODE_ONLY -> {
+                        String pc = findPostalCode(cl.line());
+                        if (pc != null) builder.postalCode(pc);
+                    }
+                    case ADDRESSEE -> {
+                        if (!addresseeSeen) {
+                            interpretAddresseeLine(cl.line());
+                            addresseeSeen = true;
+                        } else {
+                            // Subsequent unanchored lines → route through delivery interpretation
+                            interpretDeliveryLine(cl.line());
+                        }
+                    }
+                    default -> interpretDeliveryLine(cl.line());
+                }
             }
         }
 
@@ -1041,23 +1104,27 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         if (words.isEmpty()) return;
 
-        // Check for prefix direction (e.g., "N MAIN ST", "S WESTSIDE RD")
-        // Only short abbreviations are treated as prefix — full words like NORTH could be street names
+        // Direction detection: suffix preferred over prefix (suffix is unambiguously a direction,
+        // while prefix letters like E/N/S/W are ambiguous — could be direction, unit, or street name abbreviation)
         String direction = null;
-        if (words.size() > 1 && PREFIX_DIRECTIONS.contains(words.get(0).toUpperCase())) {
-            direction = words.get(0).toUpperCase();
-            words.remove(0);
-            wordIndices.remove(0);
-        }
+        boolean hasPrefixDir = words.size() > 1
+                && PREFIX_DIRECTIONS.contains(words.get(0).toUpperCase());
 
-        // Check if last word is a direction (suffix, e.g., "MAIN ST N")
-        if (direction == null && words.size() > 1) {
+        // Check suffix first (higher confidence — unambiguously a direction)
+        if (words.size() > 1) {
             String lastWord = words.get(words.size() - 1).toUpperCase();
             if (DIRECTIONS.contains(lastWord)) {
                 direction = lastWord;
                 words.remove(words.size() - 1);
                 wordIndices.remove(wordIndices.size() - 1);
             }
+        }
+
+        // Fallback: use prefix only when no suffix was found
+        if (direction == null && hasPrefixDir) {
+            direction = words.get(0).toUpperCase();
+            words.remove(0);
+            wordIndices.remove(0);
         }
 
         // Plan 5: Detect trailing unit after street type (e.g., "MAIN ST APT 5")
@@ -1068,7 +1135,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         classifyStreetNameAndType(words);
 
-        if (direction != null) {
+        // Don't overwrite a direction already set by extractTrailingUnit (e.g., "DR NW APT 5")
+        if (direction != null && !builder.build().hasStreetDirection()) {
             builder.streetDirection(direction);
         }
     }
@@ -1234,15 +1302,13 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         if (words.isEmpty()) return;
 
-        // Check for prefix direction (e.g., "N MAIN ST")
+        // Direction detection: suffix preferred over prefix
         String direction = null;
-        if (words.size() > 1 && DIRECTIONS.contains(words.get(0).toUpperCase())) {
-            direction = words.get(0).toUpperCase();
-            words.remove(0);
-        }
+        boolean hasPrefixDir = words.size() > 1
+                && DIRECTIONS.contains(words.get(0).toUpperCase());
 
-        // Check last word for suffix direction (e.g., "MAIN ST N")
-        if (direction == null && words.size() > 1) {
+        // Suffix first (higher confidence)
+        if (words.size() > 1) {
             String lastWord = words.get(words.size() - 1).toUpperCase();
             if (DIRECTIONS.contains(lastWord)) {
                 direction = lastWord;
@@ -1250,10 +1316,17 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
         }
 
+        // Prefix fallback
+        if (direction == null && hasPrefixDir) {
+            direction = words.get(0).toUpperCase();
+            words.remove(0);
+        }
+
         // Use shared disambiguation logic
         classifyStreetNameAndType(words);
 
-        if (direction != null) {
+        // Don't overwrite a direction already set elsewhere
+        if (direction != null && !builder.build().hasStreetDirection()) {
             builder.streetDirection(direction);
         }
 
@@ -1488,7 +1561,18 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (PO_BOX_KEYWORDS.contains(firstText) || firstText.equals("RR") || firstText.equals("GD")) {
             return true;
         }
+        // "GENERAL DELIVERY" or "GEN DEL" patterns
+        if (firstText.equals("GENERAL")) {
+            return true;
+        }
+        if (isGenDel(firstText, tokens)) {
+            return true;
+        }
         if (isUnitDesignator(firstText)) {
+            return true;
+        }
+        // Concatenated unit prefix (e.g., "APT5", "STE200")
+        if (tryExtractUnitPrefix(firstText) != null) {
             return true;
         }
         // Starts with a short prefix direction followed by a number → likely "N 123 MAIN ST"
@@ -1509,6 +1593,41 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
         }
         return false;
+    }
+
+    /**
+     * Classify a pre-region line by its content anchors. Priority order prevents misclassification
+     * (e.g., a country line is checked before delivery keywords). Lines with no recognizable
+     * anchors default to ADDRESSEE; the dispatch logic promotes subsequent ADDRESSEE lines to
+     * delivery.
+     *
+     * <p>Note: {@code looksLikeStreetLine()} is deliberately excluded — it would misclassify
+     * organization names containing street-type words (e.g., "ABBEY NATIONAL CORP").
+     */
+    private LineRole classifyLine(LineTokens line) {
+        List<TokenInfo> tokens = line.tokens;
+        if (tokens.isEmpty()) return LineRole.ADDRESSEE;
+
+        // 1. Country line (CANADA, CAN, CA)
+        if (isCountryLine(line)) return LineRole.COUNTRY;
+
+        // 2. Postal-code-only line
+        if (isPostalCodeOnlyLine(line)) return LineRole.POSTAL_CODE_ONLY;
+
+        // 3. Care-of (C/O, A/S)
+        if (isCareOfLine(tokens)) return LineRole.CARE_OF;
+
+        // 4. Site/compartment/employer info
+        String firstText = tokens.get(0).text.toUpperCase();
+        if (firstText.equals("SITE") || firstText.equals("COMP") || firstText.equals("EMPL")) {
+            return LineRole.SITE_INFO;
+        }
+
+        // 5. Delivery line (civic number, PO box, RR, GD, general delivery, unit designator, etc.)
+        if (looksLikeDeliveryLine(tokens)) return LineRole.DELIVERY;
+
+        // 6. Default — no recognized anchor
+        return LineRole.ADDRESSEE;
     }
 
     private String findPostalCode(LineTokens line) {

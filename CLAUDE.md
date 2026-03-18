@@ -29,9 +29,11 @@ Java 21 required. Gradle 9.4.0 (wrapper included).
 - Minimal lexer — produces structural tokens (WORD, NUMBER, POSTAL_CODE, etc.); all semantic interpretation is in the visitor
 
 ### Visitor (`AddressComponentVisitor`)
-- Comprehensive street type lookup tables for EN and FR
+- **Anchor-based line classification**: each pre-region line is classified by content anchors (delivery keywords, care-of markers, site info prefixes) rather than ordinal position; lines with no anchors default to addressee (first) or delivery (subsequent)
+- Region identification stays positional (last line) per Canada Post convention
+- Comprehensive street type lookup tables for EN and FR (includes Calgary/Edmonton abbreviations: GD, CA, CX, PS, PZ, LP, AL, HI, GY, GL, PW, CE, LK, GW and common types: PKWY, CREST, BLUFF, SPUR, ESTATE, GATEWAY, WALKWAY, OUTLOOK)
 - French type-first disambiguation (Rule 3: e.g., "RUE PRINCIPALE" vs "123 RUE DES ÉRABLES")
-- Direction detection (EN and FR including EST, OUEST, NORD, SUD)
+- Direction detection (EN and FR including EST, OUEST, NORD, SUD) — suffix direction preferred over prefix when both present (suffix is unambiguous; prefix letter like E/N could be a street name abbreviation)
 - Province name normalization — full names ("ONTARIO"), informal abbreviations ("ONT.", "B.C."), and 2-letter codes
 - Handles informal patterns: fractional street numbers (123 1/2), dual civics (123/125), concatenated units (APT5), trailing units (123 MAIN ST APT 5), postal code on own line, comma-separated single-line addresses
 
@@ -72,6 +74,20 @@ Bulk test (`OdaBulkValidationTest`) validates the parser against full Statistics
 ```
 
 **Setup:** Download ODA zip files from [Statistics Canada ODA](https://www.statcan.gc.ca/en/lode/databases/oda) and place in `oda-data/` (gitignored). The test reads CSVs directly from the zip files — no unzipping needed. Reports are written to `build/reports/oda-bulk/ODA_XX_report.txt`.
+
+### NAR Bulk Validation
+
+Bulk test (`NarBulkValidationTest`) validates the parser against the Statistics Canada National Address Register (NAR). Tagged `nar-bulk`, excluded from normal builds. Tests all fields including **unit numbers** (not available in ODA). Uses MAIL_* fields (mailing-format addresses). NAR provides 17.3M+ addresses nationally with postal codes for all provinces.
+
+```bash
+# Run against all provinces in NAR zip
+./gradlew cleanTest test -PnarBulk -PnarBulkOnly
+
+# Run against specific province(s) — use 2-letter codes
+./gradlew cleanTest test -PnarBulk -PnarBulkOnly -PnarProvinces=AB,BC
+```
+
+**Setup:** Download a NAR zip from [Statistics Canada NAR](https://www150.statcan.gc.ca/n1/pub/46-26-0002/462600022022001-eng.htm), rename it to `NAR_YYYYMM.zip` (e.g., `NAR_202512.zip`), and place in `nar-data/` (gitignored). The zip contains CSVs organized by numeric province code (e.g., `Address_35.csv` = Ontario) which the test maps automatically. Reports are written to `build/reports/nar-bulk/NAR_XX_report.txt`.
 
 ## Key Dependencies
 

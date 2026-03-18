@@ -151,13 +151,18 @@ This separation means the grammar rarely needs to change. Adding a new street ty
 
 ### Address Line Interpretation
 
-Following Canada Post conventions:
+Lines are classified using **anchor-based detection** rather than fixed positions:
 
-| Line | Interpretation |
-|------|----------------|
-| First | Addressee (person or organization name) |
-| Last | Region (municipality, province, postal code) |
-| Middle | Delivery information (street address, PO box, care-of, etc.) |
+| Classification | Rule |
+|----------------|------|
+| Region | Last line (positional — Canada Post convention) |
+| Delivery | Lines starting with a civic number, PO/CP/BOX, RR, GD, GENERAL, or unit designator |
+| Care-of | Lines matching C/O or A/S pattern |
+| Site info | Lines starting with SITE, COMP, or EMPL |
+| Addressee | First line with no recognized delivery anchor |
+| Subsequent unanchored | Routed through delivery interpretation |
+
+This approach correctly handles addresses with or without an addressee line, regardless of the number of lines.
 
 ## Testing
 
@@ -193,6 +198,22 @@ The parser can be validated against full [Statistics Canada ODA](https://www.sta
 
 Reports are written to `build/reports/oda-bulk/`, including a mismatch CSV for each province for detailed analysis.
 
+### NAR Bulk Validation
+
+The parser can also be validated against the [Statistics Canada NAR](https://www150.statcan.gc.ca/n1/pub/46-26-0002/462600022022001-eng.htm) (National Address Register, 17.3M+ addresses). NAR provides **unit number** ground truth and **postal codes for all provinces** — fields that ODA lacks.
+
+Download a NAR zip, rename it to `NAR_YYYYMM.zip` (e.g., `NAR_202512.zip`), and place it in `nar-data/`:
+
+```bash
+# Validate against all provinces
+./gradlew cleanTest test -PnarBulk -PnarBulkOnly
+
+# Validate specific provinces
+./gradlew cleanTest test -PnarBulk -PnarBulkOnly -PnarProvinces=AB,ON
+```
+
+Reports are written to `build/reports/nar-bulk/`. NAR uses mailing-format fields (`MAIL_STREET_NAME`, etc.) which are closer to what users actually write than ODA's official civic forms.
+
 ### Accuracy
 
 Validated against 9,603,114 addresses across 10 provinces/territories from the Statistics Canada ODA dataset. Field accuracy is measured by case-insensitive comparison against ODA's structured ground truth fields.
@@ -202,11 +223,11 @@ Validated against 9,603,114 addresses across 10 provinces/territories from the S
 | Parse success | **100.00%** | 9,603,114 | Every address parsed without errors |
 | Province | **100.00%** | 9,603,114 | |
 | Postal code | **99.78%** | 556,943 | Mismatches are malformed codes in ODA data |
-| City | **99.49%** | 9,279,034 | ODA uses underscores in multi-word names |
+| City | **99.43%** | 9,279,034 | ODA uses underscores in multi-word names |
 | Street number | **99.13%** | 9,603,114 | ODA includes parentheses/annotations the parser strips |
-| Street type | **96.49%** | 5,547,130 | Remaining gap is normalization (full vs abbreviated forms) |
-| Street direction | **95.67%** | 767,869 | Remaining gap is normalization (O vs OUEST, E vs EAST) |
-| Street name | **93.83%** | 6,076,730 | Ordinal forms and French linking particle differences |
+| Street type | **96.77%** | 5,547,130 | Remaining gap is normalization (full vs abbreviated forms) |
+| Street direction | **96.64%** | 767,869 | Remaining gap is normalization (O vs OUEST, E vs EAST) |
+| Street name | **93.96%** | 6,076,730 | Ordinal forms and French linking particle differences |
 
 **Important context:** Many reported "mismatches" are normalization differences between the ODA ground truth and the parser's output, not parsing errors. For example:
 - **Street number**: ODA records `(3195)`, parser correctly extracts `3195`

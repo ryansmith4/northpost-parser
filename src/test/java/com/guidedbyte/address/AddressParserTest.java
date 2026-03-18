@@ -275,6 +275,101 @@ class AddressParserTest {
     }
 
     @Nested
+    @DisplayName("Direction Suffix Preference")
+    class DirectionSuffixPreferenceTests {
+
+        @Test
+        @DisplayName("Prefix + suffix → suffix wins, prefix stays in street name")
+        void prefixAndSuffix_suffixWins() {
+            var result = parser.parseAddress("JOHN SMITH\n1154 E MILLBOURNE RD NW\nEDMONTON AB T6K 1X2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetDirection()).isEqualTo("NW");
+            assertThat(result.components().streetName()).isEqualTo("E MILLBOURNE");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        @Test
+        @DisplayName("Prefix only → prefix used as direction")
+        void prefixOnly_prefixUsed() {
+            var result = parser.parseAddress("JOHN SMITH\n1154 E MILLBOURNE RD\nEDMONTON AB T6K 1X2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetDirection()).isEqualTo("E");
+            assertThat(result.components().streetName()).isEqualTo("MILLBOURNE");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        @Test
+        @DisplayName("Suffix only → suffix used (unchanged behavior)")
+        void suffixOnly_noChange() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST N\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetDirection()).isEqualTo("N");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Prefix only (no suffix) → prefix used (unchanged behavior)")
+        void prefixOnlyNoSuffix_noChange() {
+            var result = parser.parseAddress("JOHN SMITH\n123 N MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetDirection()).isEqualTo("N");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Prefix + trailing unit with direction → trailing unit direction preserved")
+        void prefixAndTrailingUnitDirection_trailingUnitWins() {
+            var result = parser.parseAddress("JOHN SMITH\n123 E MAIN DR NW APT 5\nEDMONTON AB T6K 1X2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetDirection()).isEqualTo("NW");
+            assertThat(result.components().unitNumber()).isEqualTo("5");
+        }
+    }
+
+    @Nested
+    @DisplayName("Expanded Street Types")
+    class ExpandedStreetTypeTests {
+
+        @Test
+        @DisplayName("GD type recognized as Gardens")
+        void gdTypeRecognized() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MORNINGSIDE GD SW\nCALGARY AB T2X 1X2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("MORNINGSIDE");
+            assertThat(result.components().streetType()).isEqualTo("GD");
+            assertThat(result.components().streetDirection()).isEqualTo("SW");
+        }
+
+        @Test
+        @DisplayName("GD does not trigger general delivery on civic address")
+        void gdDoesNotTriggerGeneralDelivery() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MORNINGSIDE GD\nCALGARY AB T2X 1X2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().addressType()).isEqualTo(AddressType.CIVIC);
+        }
+
+        @Test
+        @DisplayName("PKWY type recognized as Parkway")
+        void pkwyTypeRecognized() {
+            var result = parser.parseAddress("JANE DOE\n456 RIVERSIDE PKWY\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("RIVERSIDE");
+            assertThat(result.components().streetType()).isEqualTo("PKWY");
+        }
+
+        @Test
+        @DisplayName("CREST type recognized")
+        void crestTypeRecognized() {
+            var result = parser.parseAddress("BOB SMITH\n789 HILLVIEW CREST\nCALGARY AB T2X 1X2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("HILLVIEW");
+            assertThat(result.components().streetType()).isEqualTo("CREST");
+        }
+    }
+
+    @Nested
     @DisplayName("Postal Box Address Parsing")
     class PostalBoxTests {
 
