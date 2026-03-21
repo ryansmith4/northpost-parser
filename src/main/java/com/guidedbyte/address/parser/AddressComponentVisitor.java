@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
  * anchor-based classification.
  *
  * <p>Line interpretation strategy (anchor-based classification):
+ *
  * <ul>
  *   <li>Last line → region (municipality / province / postal code) — positional, per Canada Post convention
  *   <li>Pre-region lines → classified by content anchors (delivery keywords, care-of markers, etc.)
@@ -383,28 +384,112 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
-     * Street type words that are commonly used as actual street names after a French type
-     * (e.g., RUE PARK, RUE ACRES, CHEMIN RIDGE). These should NOT trigger the type-as-name
-     * guard — when they appear after a French type, the French type-first split is correct.
-     * Derived from NAR QC data where these words appear as MAIL_STREET_NAME with a separate type.
+     * Street type words that are commonly used as actual street names after a French type (e.g., RUE PARK, RUE ACRES,
+     * CHEMIN RIDGE). These should NOT trigger the type-as-name guard — when they appear after a French type, the French
+     * type-first split is correct. Derived from NAR QC data where these words appear as MAIL_STREET_NAME with a
+     * separate type.
      */
     private static final Set<String> TYPE_WORDS_USED_AS_NAMES = Set.of(
-            "ACRES", "BAY", "BEACH", "BEND", "CAPE", "CENTRE", "CHASE", "COMMON",
-            "COURT", "COVE", "CREEK", "CRESCENT", "CROSSING", "DALE", "DELL",
-            "DOWNS", "END", "ESTATE", "ESTATES", "FARM", "FIELD", "FORD", "FOREST",
-            "FRONT", "GARDEN", "GARDENS", "GLEN", "GRANGE", "GREEN", "GROVE",
-            "HARBOUR", "HAVEN", "HEATH", "HEIGHTS", "HILL", "HOLLOW", "ISLAND",
-            "KEY", "KNOLL", "LANDING", "LINK", "LOOKOUT", "MALL", "MANOR",
-            "MEADOW", "MEADOWS", "MOUNT", "MOUNTAIN", "ORCHARD", "PARK", "PINES",
-            "PLATEAU", "POINT", "PORT", "RANCH", "REACH", "RIDGE", "RISE", "RUN",
-            "SHORE", "SHORES", "SPRING", "SQUARE", "TERRACE", "TOWERS", "VALE",
-            "VIEW", "VILLAGE", "VISTA", "WALK", "WHARF", "WOOD", "WOODS",
+            "ACRES",
+            "BAY",
+            "BEACH",
+            "BEND",
+            "CAPE",
+            "CENTRE",
+            "CHASE",
+            "COMMON",
+            "COURT",
+            "COVE",
+            "CREEK",
+            "CRESCENT",
+            "CROSSING",
+            "DALE",
+            "DELL",
+            "DOWNS",
+            "END",
+            "ESTATE",
+            "ESTATES",
+            "FARM",
+            "FIELD",
+            "FORD",
+            "FOREST",
+            "FRONT",
+            "GARDEN",
+            "GARDENS",
+            "GLEN",
+            "GRANGE",
+            "GREEN",
+            "GROVE",
+            "HARBOUR",
+            "HAVEN",
+            "HEATH",
+            "HEIGHTS",
+            "HILL",
+            "HOLLOW",
+            "ISLAND",
+            "KEY",
+            "KNOLL",
+            "LANDING",
+            "LINK",
+            "LOOKOUT",
+            "MALL",
+            "MANOR",
+            "MEADOW",
+            "MEADOWS",
+            "MOUNT",
+            "MOUNTAIN",
+            "ORCHARD",
+            "PARK",
+            "PINES",
+            "PLATEAU",
+            "POINT",
+            "PORT",
+            "RANCH",
+            "REACH",
+            "RIDGE",
+            "RISE",
+            "RUN",
+            "SHORE",
+            "SHORES",
+            "SPRING",
+            "SQUARE",
+            "TERRACE",
+            "TOWERS",
+            "VALE",
+            "VIEW",
+            "VILLAGE",
+            "VISTA",
+            "WALK",
+            "WHARF",
+            "WOOD",
+            "WOODS",
             // Also exclude French type words — double French type (PARC RUE, JARDIN RUE)
             // is a classification issue, not a type-as-name issue
-            "RUE", "CHEMIN", "ROUTE", "RANG", "PLACE", "BOULEVARD", "AVENUE",
-            "ALLÉE", "ALLEE", "CÔTE", "COTE", "PARC", "PASSAGE", "PROMENADE",
-            "CROISSANT", "IMPASSE", "SENTIER", "CIRCUIT", "CERCLE", "TUNNEL",
-            "MONTÉE", "MONTEE", "VOIE", "RUELLE", "TERRASSE");
+            "RUE",
+            "CHEMIN",
+            "ROUTE",
+            "RANG",
+            "PLACE",
+            "BOULEVARD",
+            "AVENUE",
+            "ALLÉE",
+            "ALLEE",
+            "CÔTE",
+            "COTE",
+            "PARC",
+            "PASSAGE",
+            "PROMENADE",
+            "CROISSANT",
+            "IMPASSE",
+            "SENTIER",
+            "CIRCUIT",
+            "CERCLE",
+            "TUNNEL",
+            "MONTÉE",
+            "MONTEE",
+            "VOIE",
+            "RUELLE",
+            "TERRASSE");
 
     /**
      * Checks if a word is a known street type, stripping a trailing period if needed. Returns the canonical form
@@ -437,8 +522,10 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         return word.endsWith(".") ? word.substring(0, word.length() - 1) : word;
     }
 
-    /** Returns true if the word is a bare identifier (single letter, or short number/alphanumeric code like 3, 4A).
-     *  Limited to 1-2 digit numbers to avoid matching French ordinals (100E = 100ème). */
+    /**
+     * Returns true if the word is a bare identifier (single letter, or short number/alphanumeric code like 3, 4A).
+     * Limited to 1-2 digit numbers to avoid matching French ordinals (100E = 100ème).
+     */
     private static boolean isBareName(String word) {
         if (word.length() == 1 && Character.isLetter(word.charAt(0))) return true;
         return word.matches("\\d{1,2}[A-Za-z]?");
@@ -552,10 +639,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "SUD");
 
     /**
-     * Checks if two direction words form an opposing pair (EAST-WEST, NORTH-SOUTH).
-     * Per USPS Pub 28 §234: opposing direction pairs in a street name are part of the name,
-     * not directional indicators. Only applies to full words — abbreviated forms (E, W, N, S)
-     * in combination are ambiguous and handled normally.
+     * Checks if two direction words form an opposing pair (EAST-WEST, NORTH-SOUTH). Per USPS Pub 28 §234: opposing
+     * direction pairs in a street name are part of the name, not directional indicators. Only applies to full words —
+     * abbreviated forms (E, W, N, S) in combination are ambiguous and handled normally.
      */
     private static boolean isOpposingDirectionPair(String first, String second) {
         return switch (first) {
@@ -1173,8 +1259,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 // Digit-starting mixed token (5A, 2B) — always a unit identifier when designator is present
                 builder.unitNumber(candidate.text);
                 idx++;
-            } else if ((candidate.type == CanadianAddressParser.WORD
-                    || candidate.type == CanadianAddressParser.NUMBER) && hasFollowingCivic) {
+            } else if ((candidate.type == CanadianAddressParser.WORD || candidate.type == CanadianAddressParser.NUMBER)
+                    && hasFollowingCivic) {
                 // WORD or NUMBER followed by civic number → unit value (APT A 394, APT 5 394)
                 builder.unitNumber(candidate.text);
                 idx++;
@@ -1198,20 +1284,18 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
-     * Collect street words from tokens, preserving adjacent hyphens, slashes, and ampersands.
-     * Adjacent hyphen/slash-connected tokens (no whitespace: {@code 2E-ET-3E}, {@code 36/37})
-     * are joined into a single word. Ampersands are preserved as {@code &} in the word list.
-     * Other punctuation is skipped.
+     * Collect street words from tokens, preserving adjacent hyphens, slashes, and ampersands. Adjacent
+     * hyphen/slash-connected tokens (no whitespace: {@code 2E-ET-3E}, {@code 36/37}) are joined into a single word.
+     * Ampersands are preserved as {@code &} in the word list. Other punctuation is skipped.
      *
-     * <p>Slashes that form fractions or dual civics are already consumed by
-     * {@link #handlePostCivicSlashPattern} before this method is called, so any remaining
-     * slash in the street tokens is a compound identifier (sideroad numbers, bilingual names,
-     * highway designations).
+     * <p>Slashes that form fractions or dual civics are already consumed by {@link #handlePostCivicSlashPattern} before
+     * this method is called, so any remaining slash in the street tokens is a compound identifier (sideroad numbers,
+     * bilingual names, highway designations).
      *
-     * @param tokens     the full token list
-     * @param startIdx   index to start collecting from
-     * @param wordIndices optional list to track original token indices (for trailing unit detection);
-     *                    pass null if not needed
+     * @param tokens the full token list
+     * @param startIdx index to start collecting from
+     * @param wordIndices optional list to track original token indices (for trailing unit detection); pass null if not
+     *     needed
      * @return the collected words
      */
     private static List<String> collectStreetWords(List<TokenInfo> tokens, int startIdx, List<Integer> wordIndices) {
@@ -1225,11 +1309,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 // (e.g., 2E-ET, ET-3E, 36/37, PETIT/LITTLE)
                 if (!words.isEmpty() && i >= 2) {
                     TokenInfo sep = tokens.get(i - 1);
-                    boolean isJoiner = sep.type == CanadianAddressParser.HYPHEN
-                            || sep.type == CanadianAddressParser.SLASH;
-                    if (isJoiner
-                            && areAdjacent(tokens.get(i - 2), sep)
-                            && areAdjacent(sep, t)) {
+                    boolean isJoiner =
+                            sep.type == CanadianAddressParser.HYPHEN || sep.type == CanadianAddressParser.SLASH;
+                    if (isJoiner && areAdjacent(tokens.get(i - 2), sep) && areAdjacent(sep, t)) {
                         // Append to previous word: "2E" + "-" + "ET" → "2E-ET"
                         // or "36" + "/" + "37" → "36/37"
                         String prev = words.remove(words.size() - 1);
@@ -1295,8 +1377,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // Direction detection: suffix preferred over prefix (suffix is unambiguously a direction,
         // while prefix letters like E/N/S/W are ambiguous — could be direction, unit, or street name abbreviation)
         String direction = null;
-        boolean hasPrefixDir = words.size() > 1
-                && PREFIX_DIRECTIONS.contains(words.get(0).toUpperCase());
+        boolean hasPrefixDir =
+                words.size() > 1 && PREFIX_DIRECTIONS.contains(words.get(0).toUpperCase());
 
         // Check suffix first (higher confidence — unambiguously a direction)
         if (words.size() > 1) {
@@ -1311,8 +1393,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 // Guard: opposing direction pairs form a street name, not a direction
                 // "EAST WEST RD" → name=EAST WEST, not dir=WEST (USPS Pub 28 §234)
                 boolean isOpposingPair = words.size() >= 2
-                        && isOpposingDirectionPair(
-                                words.get(words.size() - 2).toUpperCase(), lastWord);
+                        && isOpposingDirectionPair(words.get(words.size() - 2).toUpperCase(), lastWord);
 
                 if (!wouldLeaveBareFrenchType && !isOpposingPair) {
                     direction = lastWord;
@@ -1543,8 +1624,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Direction detection: suffix preferred over prefix
         String direction = null;
-        boolean hasPrefixDir = words.size() > 1
-                && DIRECTIONS.contains(words.get(0).toUpperCase());
+        boolean hasPrefixDir =
+                words.size() > 1 && DIRECTIONS.contains(words.get(0).toUpperCase());
 
         // Suffix first (higher confidence)
         if (words.size() > 1) {
@@ -1554,8 +1635,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                         && lastWord.length() == 1
                         && isFrenchStreetType(words.get(0).toUpperCase());
                 boolean isOpposingPair = words.size() >= 2
-                        && isOpposingDirectionPair(
-                                words.get(words.size() - 2).toUpperCase(), lastWord);
+                        && isOpposingDirectionPair(words.get(words.size() - 2).toUpperCase(), lastWord);
                 if (!wouldLeaveBareFrenchType && !isOpposingPair) {
                     direction = lastWord;
                     words.remove(words.size() - 1);
@@ -1804,7 +1884,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             return true;
         }
         // Starts with parenthetical number → civic address with parens (e.g., "(3195) MAIN ST")
-        if (first.type == CanadianAddressParser.LPAREN && tokens.size() >= 2
+        if (first.type == CanadianAddressParser.LPAREN
+                && tokens.size() >= 2
                 && (tokens.get(1).type == CanadianAddressParser.NUMBER
                         || tokens.get(1).type == CanadianAddressParser.ALPHANUMERIC)) {
             return true;
@@ -1849,13 +1930,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
-     * Classify a pre-region line by its content anchors. Priority order prevents misclassification
-     * (e.g., a country line is checked before delivery keywords). Lines with no recognizable
-     * anchors default to ADDRESSEE; the dispatch logic promotes subsequent ADDRESSEE lines to
-     * delivery.
+     * Classify a pre-region line by its content anchors. Priority order prevents misclassification (e.g., a country
+     * line is checked before delivery keywords). Lines with no recognizable anchors default to ADDRESSEE; the dispatch
+     * logic promotes subsequent ADDRESSEE lines to delivery.
      *
-     * <p>Note: {@code looksLikeStreetLine()} is deliberately excluded — it would misclassify
-     * organization names containing street-type words (e.g., "ABBEY NATIONAL CORP").
+     * <p>Note: {@code looksLikeStreetLine()} is deliberately excluded — it would misclassify organization names
+     * containing street-type words (e.g., "ABBEY NATIONAL CORP").
      */
     private LineRole classifyLine(LineTokens line) {
         List<TokenInfo> tokens = line.tokens;

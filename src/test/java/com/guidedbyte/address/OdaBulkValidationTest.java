@@ -76,8 +76,7 @@ class OdaBulkValidationTest {
     private static final int WORKER_THREADS = Runtime.getRuntime().availableProcessors();
     private static final int QUEUE_CAPACITY = 10_000;
 
-    private static final ThreadLocal<AddressParserService> PARSER =
-            ThreadLocal.withInitial(AddressParserService::new);
+    private static final ThreadLocal<AddressParserService> PARSER = ThreadLocal.withInitial(AddressParserService::new);
 
     private final LongAdder processedCount = new LongAdder();
     private volatile long provinceStartTime;
@@ -89,14 +88,17 @@ class OdaBulkValidationTest {
         processedCount.reset();
 
         Runtime rt = Runtime.getRuntime();
-        System.out.printf("=== %s: %s, %d worker threads, heap max=%dMB ===%n",
+        System.out.printf(
+                "=== %s: %s, %d worker threads, heap max=%dMB ===%n",
                 province, zipPath.getFileName(), WORKER_THREADS, rt.maxMemory() / (1024 * 1024));
 
         provinceStartTime = System.currentTimeMillis();
 
         var executor = new ThreadPoolExecutor(
-                WORKER_THREADS, WORKER_THREADS,
-                0L, TimeUnit.MILLISECONDS,
+                WORKER_THREADS,
+                WORKER_THREADS,
+                0L,
+                TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(QUEUE_CAPACITY),
                 new ThreadPoolExecutor.CallerRunsPolicy());
 
@@ -111,7 +113,8 @@ class OdaBulkValidationTest {
 
         long elapsed = System.currentTimeMillis() - provinceStartTime;
         long total = processedCount.sum();
-        System.out.printf("=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
+        System.out.printf(
+                "=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
                 province, total, elapsed, elapsed > 0 ? total / (elapsed / 1000.0) : 0);
 
         stats.printSummary(System.out);
@@ -129,7 +132,8 @@ class OdaBulkValidationTest {
         double rate = elapsed > 0 ? count / (elapsed / 1000.0) : 0;
         Runtime rt = Runtime.getRuntime();
         long usedMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
-        System.out.printf("  %s: %,d processed (%.0f addr/sec, queue=%d, heap=%dMB)%n",
+        System.out.printf(
+                "  %s: %,d processed (%.0f addr/sec, queue=%d, heap=%dMB)%n",
                 province, count, rate, executor.getQueue().size(), usedMB);
     }
 
@@ -367,7 +371,8 @@ class OdaBulkValidationTest {
 
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldHas = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMatches = new ConcurrentHashMap<>();
-        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches =
+                new ConcurrentHashMap<>();
 
         private final ConcurrentMap<String, List<String>> sampleMismatches = new ConcurrentHashMap<>();
         private static final int MAX_SAMPLES = 50;
@@ -442,10 +447,10 @@ class OdaBulkValidationTest {
             out.println("=".repeat(80));
             out.printf("Rows skipped:            %,d%n", skip);
             skipped.entrySet().stream()
-                    .sorted(Map.Entry.<String, LongAdder>comparingByValue(
-                                    Comparator.comparingLong(LongAdder::sum))
+                    .sorted(Map.Entry.<String, LongAdder>comparingByValue(Comparator.comparingLong(LongAdder::sum))
                             .reversed())
-                    .forEach(e -> out.printf("  %-30s %,d%n", e.getKey(), e.getValue().sum()));
+                    .forEach(e ->
+                            out.printf("  %-30s %,d%n", e.getKey(), e.getValue().sum()));
             out.printf("Rows tested:             %,d%n", total);
             out.println("-".repeat(80));
             out.printf("Parse success:           %,d / %,d  (%.4f%%)%n", success, total, pct(success, total));
@@ -475,7 +480,9 @@ class OdaBulkValidationTest {
                     .forEach(entry -> {
                         String p = entry.getKey();
                         long pt = entry.getValue().sum();
-                        long ps = parseSuccesses.containsKey(p) ? parseSuccesses.get(p).sum() : 0;
+                        long ps = parseSuccesses.containsKey(p)
+                                ? parseSuccesses.get(p).sum()
+                                : 0;
                         out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
                     });
 
@@ -484,11 +491,11 @@ class OdaBulkValidationTest {
                 out.println("UNRECOGNIZED STREET TYPES (top 20)");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
-                                        Comparator.comparingLong(LongAdder::sum))
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(Comparator.comparingLong(LongAdder::sum))
                                 .reversed())
                         .limit(20)
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
+                        .forEach(e -> out.printf(
+                                "  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
 
             out.println("=".repeat(80));
@@ -514,15 +521,14 @@ class OdaBulkValidationTest {
                 out.println("ALL UNRECOGNIZED STREET TYPES");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
-                                        Comparator.comparingLong(LongAdder::sum))
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(Comparator.comparingLong(LongAdder::sum))
                                 .reversed())
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
+                        .forEach(e -> out.printf(
+                                "  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
         }
 
-        private static long sumField(
-                ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMap, String field) {
+        private static long sumField(ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMap, String field) {
             ConcurrentMap<String, LongAdder> m = fieldMap.get(field);
             return m == null ? 0 : sum(m);
         }

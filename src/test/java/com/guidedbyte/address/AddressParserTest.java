@@ -867,9 +867,8 @@ class AddressParserTest {
         @Test
         @DisplayName("Full street name with name only (no type or direction)")
         void fullStreetNameOnly() {
-            var components = AddressComponents.builder()
-                    .streetName("GRANDE ALLÉE")
-                    .build();
+            var components =
+                    AddressComponents.builder().streetName("GRANDE ALLÉE").build();
 
             assertThat(components.getFullStreetName()).isPresent();
             assertThat(components.getFullStreetName().get()).isEqualTo("GRANDE ALLÉE");

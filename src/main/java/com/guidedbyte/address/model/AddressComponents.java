@@ -280,9 +280,8 @@ public record AddressComponents(
     }
 
     /**
-     * Returns the full street designation: name + type + direction combined.
-     * E.g., "EVERITT DRIVE NORTH", "MAIN STREET", "RUE PRINCIPALE O".
-     * This is the complete street identifier as it would appear on signage.
+     * Returns the full street designation: name + type + direction combined. E.g., "EVERITT DRIVE NORTH", "MAIN
+     * STREET", "RUE PRINCIPALE O". This is the complete street identifier as it would appear on signage.
      */
     public Optional<String> getFullStreetName() {
         if (!hasStreetName()) return Optional.empty();

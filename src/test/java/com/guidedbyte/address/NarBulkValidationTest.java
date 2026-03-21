@@ -104,11 +104,11 @@ class NarBulkValidationTest {
     private static final int QUEUE_CAPACITY = 10_000;
 
     /** Thread-local parser — avoids creating a new service per call while remaining thread-safe. */
-    private static final ThreadLocal<AddressParserService> PARSER =
-            ThreadLocal.withInitial(AddressParserService::new);
+    private static final ThreadLocal<AddressParserService> PARSER = ThreadLocal.withInitial(AddressParserService::new);
 
     /** Shared progress counter — incremented by workers, read by progress reporter. */
     private final LongAdder processedCount = new LongAdder();
+
     private volatile long provinceStartTime;
 
     @ParameterizedTest(name = "{0}")
@@ -118,7 +118,8 @@ class NarBulkValidationTest {
         processedCount.reset();
 
         Runtime rt = Runtime.getRuntime();
-        System.out.printf("=== %s: %d CSV file(s), %d worker threads, heap max=%dMB ===%n",
+        System.out.printf(
+                "=== %s: %d CSV file(s), %d worker threads, heap max=%dMB ===%n",
                 province, csvEntries.size(), WORKER_THREADS, rt.maxMemory() / (1024 * 1024));
 
         provinceStartTime = System.currentTimeMillis();
@@ -126,8 +127,10 @@ class NarBulkValidationTest {
         // Bounded work queue + CallerRunsPolicy = natural backpressure.
         // When the queue fills, the reader thread does parsing work instead of blocking idle.
         var executor = new ThreadPoolExecutor(
-                WORKER_THREADS, WORKER_THREADS,
-                0L, TimeUnit.MILLISECONDS,
+                WORKER_THREADS,
+                WORKER_THREADS,
+                0L,
+                TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(QUEUE_CAPACITY),
                 new ThreadPoolExecutor.CallerRunsPolicy());
 
@@ -145,7 +148,8 @@ class NarBulkValidationTest {
 
         long elapsed = System.currentTimeMillis() - provinceStartTime;
         long total = processedCount.sum();
-        System.out.printf("=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
+        System.out.printf(
+                "=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
                 province, total, elapsed, total / (elapsed / 1000.0));
 
         stats.printSummary(System.out);
@@ -163,7 +167,8 @@ class NarBulkValidationTest {
         double rate = elapsed > 0 ? count / (elapsed / 1000.0) : 0;
         Runtime rt = Runtime.getRuntime();
         long usedMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
-        System.out.printf("  %s: %,d processed (%.0f addr/sec, queue=%d, heap=%dMB)%n",
+        System.out.printf(
+                "  %s: %,d processed (%.0f addr/sec, queue=%d, heap=%dMB)%n",
                 province, count, rate, executor.getQueue().size(), usedMB);
     }
 
@@ -205,7 +210,9 @@ class NarBulkValidationTest {
                     String sgcCode = m.group(1);
                     String prov = SGC_TO_PROV.get(sgcCode);
                     if (prov != null && (allowedProvinces.isEmpty() || allowedProvinces.contains(prov))) {
-                        provinceCsvs.computeIfAbsent(prov, k -> new ArrayList<>()).add(entry.getName());
+                        provinceCsvs
+                                .computeIfAbsent(prov, k -> new ArrayList<>())
+                                .add(entry.getName());
                     }
                 }
             }
@@ -214,8 +221,7 @@ class NarBulkValidationTest {
         // Sort CSV entries within each province so parts are processed in order
         provinceCsvs.values().forEach(Collections::sort);
 
-        return provinceCsvs.entrySet().stream()
-                .map(e -> Arguments.of(e.getKey(), zipPath, e.getValue()));
+        return provinceCsvs.entrySet().stream().map(e -> Arguments.of(e.getKey(), zipPath, e.getValue()));
     }
 
     private void processCsvEntry(
@@ -254,9 +260,9 @@ class NarBulkValidationTest {
     }
 
     /**
-     * Parse a CSV line respecting RFC 4180 quoted fields. Fields containing commas, quotes, or newlines
-     * are enclosed in double quotes; embedded quotes are escaped as "". A naive split(",") fails on
-     * NAR rows where CSD names contain commas (e.g., {@code "Kings, Subd. A"}).
+     * Parse a CSV line respecting RFC 4180 quoted fields. Fields containing commas, quotes, or newlines are enclosed in
+     * double quotes; embedded quotes are escaped as "". A naive split(",") fails on NAR rows where CSD names contain
+     * commas (e.g., {@code "Kings, Subd. A"}).
      */
     private static String[] parseCsvLine(String line) {
         List<String> fields = new ArrayList<>();
@@ -351,7 +357,8 @@ class NarBulkValidationTest {
         }
 
         String delivery = deliveryLine.toString();
-        String fullAddress = "TEST PERSON\n" + delivery + "\n" + regionLine.toString().trim();
+        String fullAddress =
+                "TEST PERSON\n" + delivery + "\n" + regionLine.toString().trim();
 
         stats.total(province);
 
@@ -497,7 +504,8 @@ class NarBulkValidationTest {
         // Per-field accuracy: field -> province -> count
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldHas = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMatches = new ConcurrentHashMap<>();
-        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches =
+                new ConcurrentHashMap<>();
 
         // Sample mismatches per field (for report) — bounded, so contention is minimal
         private final ConcurrentMap<String, List<String>> sampleMismatches = new ConcurrentHashMap<>();
@@ -574,10 +582,10 @@ class NarBulkValidationTest {
             out.println("=".repeat(80));
             out.printf("Rows skipped:            %,d%n", skip);
             skipped.entrySet().stream()
-                    .sorted(Map.Entry.<String, LongAdder>comparingByValue(
-                                    Comparator.comparingLong(LongAdder::sum))
+                    .sorted(Map.Entry.<String, LongAdder>comparingByValue(Comparator.comparingLong(LongAdder::sum))
                             .reversed())
-                    .forEach(e -> out.printf("  %-30s %,d%n", e.getKey(), e.getValue().sum()));
+                    .forEach(e ->
+                            out.printf("  %-30s %,d%n", e.getKey(), e.getValue().sum()));
             out.printf("Rows tested:             %,d%n", total);
             out.println("-".repeat(80));
             out.printf("Parse success:           %,d / %,d  (%.4f%%)%n", success, total, pct(success, total));
@@ -611,7 +619,9 @@ class NarBulkValidationTest {
                     .forEach(entry -> {
                         String p = entry.getKey();
                         long pt = entry.getValue().sum();
-                        long ps = parseSuccesses.containsKey(p) ? parseSuccesses.get(p).sum() : 0;
+                        long ps = parseSuccesses.containsKey(p)
+                                ? parseSuccesses.get(p).sum()
+                                : 0;
                         out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
                     });
 
@@ -621,11 +631,11 @@ class NarBulkValidationTest {
                 out.println("UNRECOGNIZED STREET TYPES (top 20)");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
-                                        Comparator.comparingLong(LongAdder::sum))
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(Comparator.comparingLong(LongAdder::sum))
                                 .reversed())
                         .limit(20)
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
+                        .forEach(e -> out.printf(
+                                "  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
 
             out.println("=".repeat(80));
@@ -652,15 +662,14 @@ class NarBulkValidationTest {
                 out.println("ALL UNRECOGNIZED STREET TYPES");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
-                                        Comparator.comparingLong(LongAdder::sum))
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(Comparator.comparingLong(LongAdder::sum))
                                 .reversed())
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
+                        .forEach(e -> out.printf(
+                                "  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
         }
 
-        private static long sumField(
-                ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMap, String field) {
+        private static long sumField(ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMap, String field) {
             ConcurrentMap<String, LongAdder> m = fieldMap.get(field);
             return m == null ? 0 : sum(m);
         }
