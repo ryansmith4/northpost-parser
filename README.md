@@ -18,13 +18,13 @@ Pure Java library with no framework dependencies. Validated against **9.6 millio
 ### Gradle
 
 ```groovy
-implementation 'com.guidedbyte:northpost-parser:1.0.0'
+implementation 'com.guidedbyte:northpost-parser:1.1.0'
 ```
 
 Kotlin DSL:
 
 ```kotlin
-implementation("com.guidedbyte:northpost-parser:1.0.0")
+implementation("com.guidedbyte:northpost-parser:1.1.0")
 ```
 
 ### Maven
