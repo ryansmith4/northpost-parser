@@ -1347,6 +1347,148 @@ class AddressParserTest {
         }
 
         @Test
+        @DisplayName("Spaced dash preserved: DRUMMOND RD - RTE 113 (PE dual-name)")
+        void spacedDashPE() {
+            var result = parser.parseAddress("455 DRUMMOND RD - RTE 113\nMONTAGUE PE C0A 1R0");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("DRUMMOND RD - RTE 113");
+        }
+
+        @Test
+        @DisplayName("Spaced dash preserved: TALLY HO - SWORDS RD (ON boundary)")
+        void spacedDashON() {
+            var result = parser.parseAddress("667 TALLY HO - SWORDS RD\nINNISFIL ON L9S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("TALLY HO - SWORDS");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        @Test
+        @DisplayName("Spaced dash preserved: BRAS D'OR - FLORENCE RD (NS bilingual)")
+        void spacedDashNS() {
+            var result = parser.parseAddress("115 BRAS D'OR - FLORENCE RD\nBRAS D'OR NS B1Y 2K5");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("BRAS D'OR - FLORENCE");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        // ---- Opposing direction pair preservation ----
+
+        @Test
+        @DisplayName("EAST WEST RD — opposing pair kept in name, not consumed as direction")
+        void opposingPairEastWest() {
+            var result = parser.parseAddress("949 EAST WEST RD\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("EAST WEST");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("NORTH SOUTH DR — opposing pair kept in name")
+        void opposingPairNorthSouth() {
+            var result = parser.parseAddress("100 NORTH SOUTH DR\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("NORTH SOUTH");
+            assertThat(result.components().streetType()).isEqualTo("DR");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("EAST-WEST RD — hyphenated form already a compound word")
+        void opposingPairHyphenated() {
+            var result = parser.parseAddress("949 EAST-WEST RD\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("EAST-WEST");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        @Test
+        @DisplayName("EAST/WEST RD — slashed form already a compound word")
+        void opposingPairSlashed() {
+            var result = parser.parseAddress("949 EAST/WEST RD\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("EAST/WEST");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        // ---- Mid-name direction: only short abbreviations ----
+
+        @Test
+        @DisplayName("THE WEST MALL — WEST is part of name, not mid-name direction")
+        void theWestMall() {
+            var result = parser.parseAddress("APT 1214 545 THE WEST MALL\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("THE WEST");
+            assertThat(result.components().streetType()).isEqualTo("MALL");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("PARK EAST DR — EAST is part of name, not mid-name direction")
+        void parkEastDr() {
+            var result = parser.parseAddress("100 PARK EAST DR\nWINNIPEG MB R3T 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PARK EAST");
+            assertThat(result.components().streetType()).isEqualTo("DR");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Regression: VICTORIA E ST — short form E still consumed as mid-name direction")
+        void midNameShortFormStillWorks() {
+            var result = parser.parseAddress("100 VICTORIA E ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("VICTORIA");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+            assertThat(result.components().streetDirection()).isEqualTo("E");
+        }
+
+        @Test
+        @DisplayName("Regression: MAIN ST N — suffix direction still works")
+        void suffixDirectionStillWorks() {
+            var result = parser.parseAddress("123 MAIN ST NORTH\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+            assertThat(result.components().streetDirection()).isEqualTo("NORTH");
+        }
+
+        @Test
+        @DisplayName("Parentheses preserved: DRIVEWAY (THE)")
+        void parenthesesPreserved() {
+            var result = parser.parseAddress("APT 1003 20 DRIVEWAY (THE)\nOTTAWA ON K1S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("DRIVEWAY (THE)");
+        }
+
+        @Test
+        @DisplayName("Parentheses preserved: PARKWAY (THE)")
+        void parenthesesParkway() {
+            var result = parser.parseAddress("55 PARKWAY (THE)\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PARKWAY (THE)");
+        }
+
+        @Test
+        @DisplayName("Parenthetical civic number: (3195) SOME ST")
+        void parentheticalCivicNumber() {
+            var result = parser.parseAddress("(3195) MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetNumber()).isEqualTo("3195");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Adjacent hyphen NOT affected by spaced dash fix")
+        void adjacentHyphenUnaffected() {
+            var result = parser.parseAddress("631 2E-ET-3E RANG DE COLOMBOURG\nQUÉBEC QC G1K 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("2E-ET-3E RANG DE COLOMBOURG");
+        }
+
+        @Test
         @DisplayName("Regression: existing hyphenated names still work (CÔTE-DES-NEIGES)")
         void regressionHyphenatedFrenchName() {
             var result = parser.parseAddress("456 CHEMIN DE LA CÔTE-DES-NEIGES\nMONTRÉAL QC H3Z 2Y7");

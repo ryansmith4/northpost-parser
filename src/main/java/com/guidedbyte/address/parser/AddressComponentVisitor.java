@@ -383,6 +383,30 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
+     * Street type words that are commonly used as actual street names after a French type
+     * (e.g., RUE PARK, RUE ACRES, CHEMIN RIDGE). These should NOT trigger the type-as-name
+     * guard — when they appear after a French type, the French type-first split is correct.
+     * Derived from NAR QC data where these words appear as MAIL_STREET_NAME with a separate type.
+     */
+    private static final Set<String> TYPE_WORDS_USED_AS_NAMES = Set.of(
+            "ACRES", "BAY", "BEACH", "BEND", "CAPE", "CENTRE", "CHASE", "COMMON",
+            "COURT", "COVE", "CREEK", "CRESCENT", "CROSSING", "DALE", "DELL",
+            "DOWNS", "END", "ESTATE", "ESTATES", "FARM", "FIELD", "FORD", "FOREST",
+            "FRONT", "GARDEN", "GARDENS", "GLEN", "GRANGE", "GREEN", "GROVE",
+            "HARBOUR", "HAVEN", "HEATH", "HEIGHTS", "HILL", "HOLLOW", "ISLAND",
+            "KEY", "KNOLL", "LANDING", "LINK", "LOOKOUT", "MALL", "MANOR",
+            "MEADOW", "MEADOWS", "MOUNT", "MOUNTAIN", "ORCHARD", "PARK", "PINES",
+            "PLATEAU", "POINT", "PORT", "RANCH", "REACH", "RIDGE", "RISE", "RUN",
+            "SHORE", "SHORES", "SPRING", "SQUARE", "TERRACE", "TOWERS", "VALE",
+            "VIEW", "VILLAGE", "VISTA", "WALK", "WHARF", "WOOD", "WOODS",
+            // Also exclude French type words — double French type (PARC RUE, JARDIN RUE)
+            // is a classification issue, not a type-as-name issue
+            "RUE", "CHEMIN", "ROUTE", "RANG", "PLACE", "BOULEVARD", "AVENUE",
+            "ALLÉE", "ALLEE", "CÔTE", "COTE", "PARC", "PASSAGE", "PROMENADE",
+            "CROISSANT", "IMPASSE", "SENTIER", "CIRCUIT", "CERCLE", "TUNNEL",
+            "MONTÉE", "MONTEE", "VOIE", "RUELLE", "TERRASSE");
+
+    /**
      * Checks if a word is a known street type, stripping a trailing period if needed. Returns the canonical form
      * (without period) on match, or null if not a recognized type. This handles Ontario-style abbreviations like DR.,
      * RD., CRES., AVE. without polluting the type lookup tables.
@@ -526,6 +550,22 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             "OUEST",
             "NORD",
             "SUD");
+
+    /**
+     * Checks if two direction words form an opposing pair (EAST-WEST, NORTH-SOUTH).
+     * Per USPS Pub 28 §234: opposing direction pairs in a street name are part of the name,
+     * not directional indicators. Only applies to full words — abbreviated forms (E, W, N, S)
+     * in combination are ambiguous and handled normally.
+     */
+    private static boolean isOpposingDirectionPair(String first, String second) {
+        return switch (first) {
+            case "EAST", "EST" -> Set.of("WEST", "OUEST").contains(second);
+            case "WEST", "OUEST" -> Set.of("EAST", "EST").contains(second);
+            case "NORTH", "NORD" -> Set.of("SOUTH", "SUD").contains(second);
+            case "SOUTH", "SUD" -> Set.of("NORTH", "NORD").contains(second);
+            default -> false;
+        };
+    }
 
     /** Unit designators (English and French) */
     private static final Set<String> UNIT_DESIGNATORS = Set.of(
@@ -1011,9 +1051,24 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
 
         // Check if line starts with NUMBER or ALPHANUMERIC → likely civic address
+        // Also handle parenthetical civic numbers: (3195) SOME ST → skip leading parens
         if (firstToken.type == CanadianAddressParser.NUMBER || firstToken.type == CanadianAddressParser.ALPHANUMERIC) {
             interpretCivicLine(tokens);
             return;
+        }
+        if (firstToken.type == CanadianAddressParser.LPAREN && tokens.size() >= 2) {
+            TokenInfo second = tokens.get(1);
+            if (second.type == CanadianAddressParser.NUMBER || second.type == CanadianAddressParser.ALPHANUMERIC) {
+                // Strip leading/trailing parens and parse as civic: (3195) ST → 3195 ST
+                List<TokenInfo> stripped = new ArrayList<>();
+                for (TokenInfo tk : tokens) {
+                    if (tk.type != CanadianAddressParser.LPAREN && tk.type != CanadianAddressParser.RPAREN) {
+                        stripped.add(tk);
+                    }
+                }
+                interpretCivicLine(stripped);
+                return;
+            }
         }
 
         // Check if this looks like a street name without a number (e.g., "MAIN STREET")
@@ -1188,8 +1243,42 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             } else if (t.type == CanadianAddressParser.AMPERSAND) {
                 words.add("&");
                 if (wordIndices != null) wordIndices.add(i);
+            } else if (t.type == CanadianAddressParser.LPAREN) {
+                // Collect parenthesized group: (THE), (A-13), etc.
+                // Attach to previous word: "DRIVEWAY" + " (THE)" → "DRIVEWAY (THE)"
+                StringBuilder paren = new StringBuilder("(");
+                for (int j = i + 1; j < tokens.size(); j++) {
+                    TokenInfo pt = tokens.get(j);
+                    if (pt.type == CanadianAddressParser.RPAREN) {
+                        paren.append(")");
+                        i = j; // advance past closing paren
+                        break;
+                    } else if (pt.type == CanadianAddressParser.WORD
+                            || pt.type == CanadianAddressParser.ALPHANUMERIC
+                            || pt.type == CanadianAddressParser.NUMBER
+                            || pt.type == CanadianAddressParser.HYPHEN) {
+                        if (paren.length() > 1) paren.append(pt.type == CanadianAddressParser.HYPHEN ? "-" : " ");
+                        paren.append(pt.text);
+                    }
+                }
+                if (!words.isEmpty()) {
+                    String prev = words.remove(words.size() - 1);
+                    words.add(prev + " " + paren);
+                } else {
+                    words.add(paren.toString());
+                }
+            } else if (t.type == CanadianAddressParser.HYPHEN && !words.isEmpty()) {
+                // Spaced hyphens (not adjacent to neighbors) are preserved as dash separators.
+                // PE dual-name: "DRUMMOND RD - RTE 113", ON boundary: "TALLY HO - SWORDS RD"
+                // Adjacent hyphens (no spaces) are already handled above by joining compounds.
+                boolean adjacentToPrev = i > 0 && areAdjacent(tokens.get(i - 1), t);
+                boolean adjacentToNext = i + 1 < tokens.size() && areAdjacent(t, tokens.get(i + 1));
+                if (!adjacentToPrev && !adjacentToNext) {
+                    words.add("-");
+                    if (wordIndices != null) wordIndices.add(i);
+                }
             }
-            // Skip other punctuation tokens (COMMA, DOT, HYPHEN/SLASH handled above)
+            // Skip other punctuation tokens (COMMA, DOT, non-spaced SLASH)
         }
         return words;
     }
@@ -1218,7 +1307,14 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 boolean wouldLeaveBareFrenchType = words.size() == 2
                         && lastWord.length() == 1
                         && isFrenchStreetType(words.get(0).toUpperCase());
-                if (!wouldLeaveBareFrenchType) {
+
+                // Guard: opposing direction pairs form a street name, not a direction
+                // "EAST WEST RD" → name=EAST WEST, not dir=WEST (USPS Pub 28 §234)
+                boolean isOpposingPair = words.size() >= 2
+                        && isOpposingDirectionPair(
+                                words.get(words.size() - 2).toUpperCase(), lastWord);
+
+                if (!wouldLeaveBareFrenchType && !isOpposingPair) {
                     direction = lastWord;
                     words.remove(words.size() - 1);
                     wordIndices.remove(wordIndices.size() - 1);
@@ -1355,16 +1451,16 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             String normalized = normalizeStreetType(firstWord);
             List<String> nameWords = words.subList(1, words.size());
 
-            // Guard: remaining name is a single unambiguous type abbreviation → use English pattern
+            // Guard: remaining name is a recognized type AND not a word commonly used as a
+            // street name → use English pattern instead of French type-first.
             // "AVENUE RD" → name=AVENUE, type=RD (not type=AVENUE, name=RD)
             // "PROMENADE CIR" → name=PROMENADE, type=CIR
-            // "COTE AVE" → name=COTE, type=AVE
-            // Limited to abbreviations that are never used as street names.
-            // Full words like ACRES, PARK can be legitimate names after a French type.
+            // "COTE CLOSE" → name=COTE, type=CLOSE
+            // But NOT "ROUTE ACRES" → ACRES is a legitimate name (RUE ACRES exists in QC)
+            String nameStripped = stripPeriod(nameWords.get(0).toUpperCase());
             if (nameWords.size() == 1
-                    && Set.of("RD", "DR", "ST", "BLVD", "BV", "CRES", "CRT", "CT",
-                              "CIR", "AVE", "AV", "PK", "WAY", "PVT", "PL", "LANE", "PT")
-                            .contains(stripPeriod(nameWords.get(0).toUpperCase()))) {
+                    && isStreetType(nameStripped)
+                    && !TYPE_WORDS_USED_AS_NAMES.contains(nameStripped)) {
                 // Fall through to English pattern below
             }
             // Guard: AVENUE + bare name (single letter or number) → keep type word in name
@@ -1420,9 +1516,11 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
 
         // ---- Mid-name direction (e.g., "VICTORIA E ST", "KING W ST") ----
-        // If the word before the type is a short direction and there's still a name before it,
-        // extract the direction and exclude it from the name.
-        if (words.size() >= 3 && DIRECTIONS.contains(precedingStripped)) {
+        // If the word before the type is a short direction abbreviation (≤ 2 chars) and
+        // there's still a name before it, extract the direction and exclude it from the name.
+        // Full words (WEST, NORTH, etc.) are NOT consumed — they're more likely part of the
+        // street name (e.g., "THE WEST MALL", "PARK EAST DR").
+        if (words.size() >= 3 && precedingStripped.length() <= 2 && DIRECTIONS.contains(precedingStripped)) {
             builder.streetType(normalizedLast);
             builder.streetDirection(precedingWord);
             builder.streetName(String.join(" ", words.subList(0, words.size() - 2)));
@@ -1455,7 +1553,10 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 boolean wouldLeaveBareFrenchType = words.size() == 2
                         && lastWord.length() == 1
                         && isFrenchStreetType(words.get(0).toUpperCase());
-                if (!wouldLeaveBareFrenchType) {
+                boolean isOpposingPair = words.size() >= 2
+                        && isOpposingDirectionPair(
+                                words.get(words.size() - 2).toUpperCase(), lastWord);
+                if (!wouldLeaveBareFrenchType && !isOpposingPair) {
                     direction = lastWord;
                     words.remove(words.size() - 1);
                 }
@@ -1702,6 +1803,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (first.type == CanadianAddressParser.NUMBER || first.type == CanadianAddressParser.ALPHANUMERIC) {
             return true;
         }
+        // Starts with parenthetical number → civic address with parens (e.g., "(3195) MAIN ST")
+        if (first.type == CanadianAddressParser.LPAREN && tokens.size() >= 2
+                && (tokens.get(1).type == CanadianAddressParser.NUMBER
+                        || tokens.get(1).type == CanadianAddressParser.ALPHANUMERIC)) {
+            return true;
+        }
         String firstText = first.text.toUpperCase();
         // Starts with PO Box, RR, GD, or unit designator → delivery line
         if (PO_BOX_KEYWORDS.contains(firstText) || firstText.equals("RR") || firstText.equals("GD")) {
@@ -1904,6 +2011,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (ctx.DOT() != null) return CanadianAddressParser.DOT;
         if (ctx.COMMA() != null) return CanadianAddressParser.COMMA;
         if (ctx.AMPERSAND() != null) return CanadianAddressParser.AMPERSAND;
+        if (ctx.LPAREN() != null) return CanadianAddressParser.LPAREN;
+        if (ctx.RPAREN() != null) return CanadianAddressParser.RPAREN;
         return -1;
     }
 }

@@ -45,7 +45,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  * Canada ODA</a> and place them in the {@code oda-data/} directory at the project root.
  *
  * <p>The test reads CSV data directly from the zip files — no manual unzipping required. Each zip must contain
- * {@code ODA_XX_v1.csv} where {@code XX} is the province/territory code.
+ * {@code ODA_XX_vN.csv} where {@code XX} is the province/territory code and {@code N} is the version number.
  *
  * <p>For each ODA row, this test constructs a 3-line address, parses it, and compares all extracted fields against
  * ODA's ground truth: street number, street name, street type, street direction, municipality, province, and postal
@@ -60,7 +60,7 @@ class OdaBulkValidationTest {
 
     private static final Path ODA_DIR = Path.of("oda-data");
     private static final Path REPORT_DIR = Path.of("build/reports/oda-bulk");
-    private static final Pattern ZIP_PATTERN = Pattern.compile("ODA_([A-Z]{2})_v1\\.zip", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ZIP_PATTERN = Pattern.compile("ODA_([A-Z]{2})_v\\d+\\.zip", Pattern.CASE_INSENSITIVE);
 
     // ODA CSV column indices (0-based)
     private static final int COL_STREET_NO = 5;
@@ -147,7 +147,7 @@ class OdaBulkValidationTest {
         }
 
         List<Arguments> args = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(ODA_DIR, "ODA_*_v1.zip")) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(ODA_DIR, "ODA_*_v*.zip")) {
             for (Path zip : stream) {
                 Matcher m = ZIP_PATTERN.matcher(zip.getFileName().toString());
                 if (m.matches()) {
@@ -165,13 +165,15 @@ class OdaBulkValidationTest {
 
     private void processZip(Path zipPath, String province, BulkStats stats, ThreadPoolExecutor executor)
             throws Exception {
-        String csvName = "ODA_" + province + "_v1.csv";
+        // Find the CSV entry matching ODA_XX_vN.csv (version-flexible)
+        Pattern csvPattern = Pattern.compile("ODA_" + province + "_v\\d+\\.csv", Pattern.CASE_INSENSITIVE);
 
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
-            ZipEntry entry = zipFile.getEntry(csvName);
-            if (entry == null) {
-                throw new IllegalStateException("CSV entry '" + csvName + "' not found in " + zipPath);
-            }
+            ZipEntry entry = zipFile.stream()
+                    .filter(e -> csvPattern.matcher(e.getName()).matches())
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "No CSV matching " + csvPattern.pattern() + " found in " + zipPath));
 
             try (BufferedReader reader =
                     new BufferedReader(new InputStreamReader(zipFile.getInputStream(entry), StandardCharsets.UTF_8))) {

@@ -4,6 +4,96 @@ Tracks field-level accuracy changes across releases, measured against the Statis
 Canada National Address Register (NAR). All runs use the full NAR dataset with 100%
 parse success rate maintained throughout.
 
+## Parentheses, Direction Pairs, Mid-Name Direction Fix (2026-03-21)
+
+**Changes:**
+- Added LPAREN/RPAREN tokens to grammar. Parenthesized groups preserved in street
+  names: `DRIVEWAY (THE)` → name=`DRIVEWAY (THE)`. Parenthetical civic numbers
+  `(3195)` still parsed correctly.
+- Opposing direction pair guard: EAST WEST, NORTH SOUTH (and French equivalents)
+  kept as street name, not consumed as directions (per USPS Pub 28 §234).
+  Hyphenated/slashed forms (EAST-WEST, EAST/WEST) already handled by compound joining.
+- Mid-name direction restricted to short abbreviations (≤ 2 chars): `VICTORIA E ST`
+  → dir=E still works, but `THE WEST MALL` → WEST stays in name.
+- Flipped type-as-name guard to blacklist: fires for any type NOT in
+  TYPE_WORDS_USED_AS_NAMES. Covers CLOSE, TERR, TRAIL, MEWS, LINE automatically.
+- Spaced dash preservation: ` - ` kept in names (PE dual-name, ON boundary names).
+- Input whitespace normalization: collapses runs of spaces/tabs.
+
+**Branch:** `missing-addressee-support`
+
+### Impact (vs prior run)
+
+| Province | streetName prior | streetName new | Fixed | streetDir prior | streetDir new | Fixed |
+|----------|-----------------|---------------|-------|----------------|--------------|-------|
+| ON | 23,399 | **15,974** | **-7,425** | 41 | **0** | **-41** |
+| PE | 6,667 | **6,652** | **-15** | 0 | 0 | 0 |
+| QC | 6,656 | **5,357** | **-1,299** | 284 | 284 | 0 |
+| BC | 5,475 | **4,122** | **-1,353** | 0 | 0 | 0 |
+| AB | 2,922 | **2,817** | **-105** | 26 | **0** | **-26** |
+| NB | 52,525 | **50,562** | **-1,963** | 0 | 0 | 0 |
+| NS | 3,530 | **2,358** | **-1,172** | 0 | 0 | 0 |
+| SK | 2,737 | **2,569** | **-168** | 0 | 0 | 0 |
+| MB | 2,011 | **1,364** | **-647** | 0 | 0 | 0 |
+| NL | 1,690 | **1,628** | **-62** | 0 | 0 | 0 |
+| **Total** | | | **-14,209** | | | **-67** |
+
+### Mismatch Root Cause Analysis
+
+| Category | Count | % | Description |
+|----------|------:|--:|-------------|
+| NAR data quality | 56,188 | 60% | ROUTE+number unsplit (NB:49K, PE:6K) — confirmed NAR inconsistency |
+| Correct decomposition | 35,487 | 38% | Parser correctly extracts type/direction; NAR stores combined form |
+| Other edge cases | 1,823 | 2% | Bilingual double-type, misc reclassification |
+| Grammar limitations | 0 | 0% | Parentheses and spaced dash now handled |
+
+**True parser accuracy** (excluding NAR data issues and correct decomposition):
+**99.989%** across 16.4M addresses. Only 1,823 genuine edge cases remain.
+
+### streetDir Accuracy
+
+ON and AB streetDir reached **100.000%** — mid-name direction fix eliminated
+false direction extraction from names like THE WEST MALL.
+
+### ODA Bulk (9.6M addresses)
+
+All fields identical to v1.1.1 baseline. Runtime: 1m 46s.
+
+---
+
+## Spaced Dash, Type-as-Name Guard Flip, Whitespace Normalization (2026-03-21)
+
+**Changes:**
+- Spaced dash preservation: ` - ` in street names preserved as `-` instead of being
+  dropped. PE dual-name convention (DRUMMOND RD - RTE 113), ON/NS/BC boundary names.
+- Flipped type-as-name guard from whitelist to blacklist: guard now fires for ANY
+  recognized type after a French type word UNLESS it's in TYPE_WORDS_USED_AS_NAMES
+  (ACRES, PARK, RIDGE, etc. — words commonly used as actual street names in QC).
+  Covers CLOSE, TERR, TRAIL, MEWS, LINE automatically.
+- Consistent period-stripping via `stripPeriod` helper in all inline Set lookups.
+- Input whitespace normalization: collapses runs of spaces/tabs to single space.
+
+**Branch:** `missing-addressee-support`
+
+### Impact (vs prior run)
+
+| Province | streetName prior | streetName new | Fixed | streetType prior | streetType new | Fixed |
+|----------|-----------------|---------------|-------|-----------------|---------------|-------|
+| PE | 19,461 | **6,667** | **-12,794** | 1 | 1 | 0 |
+| ON | 24,870 | **23,399** | **-1,471** | 1,785 | **553** | **-1,232** |
+| AB | 3,180 | **2,922** | **-258** | 393 | **135** | **-258** |
+| NS | 3,649 | **3,530** | **-119** | 198 | 198 | 0 |
+| BC | 5,527 | **5,475** | **-52** | 371 | **347** | **-24** |
+| QC | 6,671 | **6,656** | **-15** | 921 | **906** | **-15** |
+| MB | 2,019 | **2,011** | **-8** | 9 | **1** | **-8** |
+| **Total** | | | **-14,717** | | | **-1,537** |
+
+### ODA Bulk (9.6M addresses)
+
+All fields identical to v1.1.1 baseline. Runtime: 1m 25s.
+
+---
+
 ## Hyphen, Slash, and Ampersand Preservation (2026-03-21)
 
 **Changes:**

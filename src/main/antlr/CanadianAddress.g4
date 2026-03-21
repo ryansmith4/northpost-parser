@@ -108,6 +108,8 @@ lineToken
     | DOT
     | COMMA
     | AMPERSAND
+    | LPAREN
+    | RPAREN
     ;
 
 
@@ -154,6 +156,8 @@ HYPHEN : '-' ;    // unit-civic separator (10-123), standalone hyphens
 DOT    : '.' ;    // standalone dots (mid-word dots consumed by WORD)
 COMMA     : ',' ;    // sometimes used before province (TORONTO, ON)
 AMPERSAND : '&' ;    // business names (SMITH & JONES LTD)
+LPAREN    : '(' ;    // parenthetical qualifiers — DRIVEWAY (THE)
+RPAREN    : ')' ;
 
 // Whitespace — spaces and tabs only; newlines are a separate token
 NL : '\r\n' | '\r' | '\n' ;

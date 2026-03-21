@@ -91,8 +91,9 @@ public class AddressParserService {
 
         logger.debug("Parsing address with strategy {}: {}", strategy, addressText);
 
-        // Normalize: trim and uppercase before feeding to the lexer
-        String normalized = addressText.trim().toUpperCase();
+        // Normalize: trim, collapse runs of spaces/tabs to a single space, and uppercase.
+        // Preserves newlines (line separators) since the grammar uses NL for line boundaries.
+        String normalized = addressText.trim().replaceAll("[ \\t]+", " ").toUpperCase();
 
         return switch (strategy) {
             case LENIENT -> doParse(normalized, ParsingMode.LENIENT);
