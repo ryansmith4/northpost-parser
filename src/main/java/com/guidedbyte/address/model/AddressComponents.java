@@ -279,6 +279,20 @@ public record AddressComponents(
         return result.isEmpty() ? Optional.empty() : Optional.of(result);
     }
 
+    /**
+     * Returns the full street designation: name + type + direction combined. E.g., "EVERITT DRIVE NORTH", "MAIN
+     * STREET", "RUE PRINCIPALE O". This is the complete street identifier as it would appear on signage.
+     */
+    public Optional<String> getFullStreetName() {
+        if (!hasStreetName()) return Optional.empty();
+
+        StringBuilder sb = new StringBuilder(streetName);
+        if (hasStreetType()) sb.append(" ").append(streetType);
+        if (hasStreetDirection()) sb.append(" ").append(streetDirection);
+
+        return Optional.of(sb.toString());
+    }
+
     /** Returns the full civic address line */
     public Optional<String> getFormattedCivicLine() {
         return switch (addressType) {

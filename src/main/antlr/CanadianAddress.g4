@@ -13,8 +13,8 @@ grammar CanadianAddress;
 //   than hardcoded grammar rules.
 //
 //   The PARSER splits input into lines and each line into tokens.
-//   The visitor uses line position and token patterns to extract
-//   address components.
+//   The visitor uses anchor-based classification and token patterns
+//   to extract address components.
 //
 // Canadian address format (Canada Post addressing guidelines):
 //   Line 1:  Addressee name (person or organization)
@@ -40,19 +40,17 @@ grammar CanadianAddress;
 // Province/territory codes (13 total — NT was missing in v1/v2):
 //   AB BC MB NB NL NT NS NU ON PE QC SK YT
 //
-// The visitor should interpret lines positionally:
-//   - FIRST line  → addressee
-//   - LAST line   → region (municipality / province / postal code)
-//   - MIDDLE lines → delivery information
-//
-// Visitor classification hints for middle (delivery) lines:
-//   - Starts with NUMBER or ALPHANUMERIC  → likely civic address
-//   - Contains SLASH (C/O, A/S)           → likely care-of
-//   - First WORD matches PO|CP|BOX        → postal box
-//   - First WORD matches RR               → rural route
-//   - First WORD matches GD               → general delivery
-//   - First WORD matches SITE|EMPL        → rural site/compartment info
-//   - Otherwise                           → additional addressee/delivery info
+// The visitor classifies lines using anchor-based detection:
+//   - LAST line   → region (municipality / province / postal code) — positional
+//   - Pre-region lines → classified by content anchors:
+//       1. Country keyword (CANADA, CAN, CA)    → country
+//       2. Postal code only                     → postal code
+//       3. C/O or A/S pattern                   → care-of
+//       4. SITE, COMP, EMPL                     → site/compartment info
+//       5. Starts with NUMBER/ALPHANUMERIC      → delivery (civic address)
+//       6. Starts with PO|CP|BOX|RR|GD|GENERAL  → delivery (non-civic)
+//       7. Starts with unit designator           → delivery
+//       8. No recognized anchor                 → addressee (first), delivery (subsequent)
 //
 // Postal code detection:
 //   - POSTAL_CODE token: 6 chars, no space (e.g., M5V2Y7)
@@ -110,6 +108,8 @@ lineToken
     | DOT
     | COMMA
     | AMPERSAND
+    | LPAREN
+    | RPAREN
     ;
 
 
@@ -156,6 +156,8 @@ HYPHEN : '-' ;    // unit-civic separator (10-123), standalone hyphens
 DOT    : '.' ;    // standalone dots (mid-word dots consumed by WORD)
 COMMA     : ',' ;    // sometimes used before province (TORONTO, ON)
 AMPERSAND : '&' ;    // business names (SMITH & JONES LTD)
+LPAREN    : '(' ;    // parenthetical qualifiers — DRIVEWAY (THE)
+RPAREN    : ')' ;
 
 // Whitespace — spaces and tabs only; newlines are a separate token
 NL : '\r\n' | '\r' | '\n' ;

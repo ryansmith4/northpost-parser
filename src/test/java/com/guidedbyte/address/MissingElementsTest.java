@@ -167,4 +167,67 @@ class MissingElementsTest {
         // Last line treated as region - 123 MAIN ST won't have province/postal
         // but parser should still succeed in lenient mode
     }
+
+    // ---- Anchor-based classification regression tests ----
+
+    @Test
+    @DisplayName("3-line no addressee - civic + PO box + region")
+    void threeLineNoAddressee() {
+        var r = parser.parseAddress("123 MAIN ST\nPO BOX 456\nTORONTO ON M5V 2Y7");
+        var c = r.components();
+        System.out.println("3-line no addressee: " + c);
+        assertThat(r.successful()).isTrue();
+        assertThat(c.addressee()).isEmpty();
+        assertThat(c.streetNumber()).isEqualTo("123");
+        assertThat(c.streetName()).isEqualTo("MAIN");
+        assertThat(c.streetType()).isEqualTo("ST");
+        assertThat(c.postalBoxNumber()).isEqualTo("456");
+        assertThat(c.municipality()).isEqualTo("TORONTO");
+        assertThat(c.province()).isEqualTo("ON");
+        assertThat(c.postalCode()).isEqualTo("M5V 2Y7");
+    }
+
+    @Test
+    @DisplayName("3-line with country, no addressee")
+    void threeLineWithCountryNoAddressee() {
+        var r = parser.parseAddress("123 MAIN ST\nTORONTO ON M5V 2Y7\nCANADA");
+        var c = r.components();
+        System.out.println("3-line country no addressee: " + c);
+        assertThat(r.successful()).isTrue();
+        assertThat(c.addressee()).isEmpty();
+        assertThat(c.streetNumber()).isEqualTo("123");
+        assertThat(c.streetName()).isEqualTo("MAIN");
+        assertThat(c.streetType()).isEqualTo("ST");
+        assertThat(c.municipality()).isEqualTo("TORONTO");
+        assertThat(c.province()).isEqualTo("ON");
+        assertThat(c.postalCode()).isEqualTo("M5V 2Y7");
+        assertThat(c.country()).isEqualTo("CANADA");
+    }
+
+    @Test
+    @DisplayName("2-line PO box + region, no addressee")
+    void twoLinePoBoxNoAddressee() {
+        var r = parser.parseAddress("PO BOX 456\nCALGARY AB T2P 1K3");
+        var c = r.components();
+        System.out.println("2-line PO box no addressee: " + c);
+        assertThat(r.successful()).isTrue();
+        assertThat(c.addressee()).isEmpty();
+        assertThat(c.postalBoxNumber()).isEqualTo("456");
+        assertThat(c.municipality()).isEqualTo("CALGARY");
+        assertThat(c.province()).isEqualTo("AB");
+        assertThat(c.postalCode()).isEqualTo("T2P 1K3");
+    }
+
+    @Test
+    @DisplayName("2-line general delivery + region, no addressee")
+    void twoLineGeneralDeliveryNoAddressee() {
+        var r = parser.parseAddress("GENERAL DELIVERY\nTORONTO ON M5V 2Y7");
+        var c = r.components();
+        System.out.println("2-line GD no addressee: " + c);
+        assertThat(r.successful()).isTrue();
+        assertThat(c.addressee()).isEmpty();
+        assertThat(c.municipality()).isEqualTo("TORONTO");
+        assertThat(c.province()).isEqualTo("ON");
+        assertThat(c.postalCode()).isEqualTo("M5V 2Y7");
+    }
 }

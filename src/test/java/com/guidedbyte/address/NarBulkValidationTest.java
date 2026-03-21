@@ -26,74 +26,106 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Bulk validation test that runs the parser against Statistics Canada Open Database of Addresses (ODA) datasets.
+ * Bulk validation test that runs the parser against the Statistics Canada National Address Register (NAR).
  *
- * <p><b>Not included in normal builds.</b> Tagged with {@code oda-bulk} and excluded by default in Gradle. To run:
+ * <p><b>Not included in normal builds.</b> Tagged with {@code nar-bulk} and excluded by default in Gradle. To run:
  *
  * <pre>
- *   # All provinces (only oda-bulk tests)
- *   ./gradlew cleanTest test -PodaBulk -PodaBulkOnly
+ *   # All provinces (only nar-bulk tests)
+ *   ./gradlew cleanTest test -PnarBulk -PnarBulkOnly
  *
- *   # Specific province(s)
- *   ./gradlew cleanTest test -PodaBulk -PodaBulkOnly -PodaProvinces=BC,QC
+ *   # Specific province(s) — use 2-letter codes
+ *   ./gradlew cleanTest test -PnarBulk -PnarBulkOnly -PnarProvinces=AB,BC
  *
- *   # Include oda-bulk alongside all other tests
- *   ./gradlew cleanTest test -PodaBulk
+ *   # Include nar-bulk alongside all other tests
+ *   ./gradlew cleanTest test -PnarBulk
  * </pre>
  *
- * <p><b>Setup:</b> Download ODA zip files from <a href="https://www.statcan.gc.ca/en/lode/databases/oda">Statistics
- * Canada ODA</a> and place them in the {@code oda-data/} directory at the project root.
+ * <p><b>Setup:</b> Download a NAR zip from <a
+ * href="https://www150.statcan.gc.ca/n1/pub/46-26-0002/462600022022001-eng.htm">Statistics Canada NAR</a> and place it
+ * in the {@code nar-data/} directory at the project root. The zip contains {@code Addresses/Address_XX[_part_N].csv}
+ * files organized by numeric province code (e.g., 35 = ON, 48 = AB). The test maps these automatically.
  *
- * <p>The test reads CSV data directly from the zip files — no manual unzipping required. Each zip must contain
- * {@code ODA_XX_vN.csv} where {@code XX} is the province/territory code and {@code N} is the version number.
+ * <p>For each NAR row, this test constructs a mailing address from the MAIL_* fields, parses it, and compares all
+ * extracted fields against NAR ground truth: unit number, street number, street name, street type, street direction,
+ * municipality, province, and postal code.
  *
- * <p>For each ODA row, this test constructs a 3-line address, parses it, and compares all extracted fields against
- * ODA's ground truth: street number, street name, street type, street direction, municipality, province, and postal
- * code.
- *
- * <p>Reports are written to {@code build/reports/oda-bulk/ODA_XX_report.txt} and a CSV of all mismatches is written to
- * {@code build/reports/oda-bulk/ODA_XX_mismatches.csv} for analysis.
+ * <p>Reports are written to {@code build/reports/nar-bulk/NAR_XX_report.txt} and a CSV of all mismatches is written to
+ * {@code build/reports/nar-bulk/NAR_XX_mismatches.csv} for analysis.
  */
-@Tag("oda-bulk")
-@DisplayName("ODA Bulk Validation")
-class OdaBulkValidationTest {
+@Tag("nar-bulk")
+@DisplayName("NAR Bulk Validation")
+class NarBulkValidationTest {
 
-    private static final Path ODA_DIR = Path.of("oda-data");
-    private static final Path REPORT_DIR = Path.of("build/reports/oda-bulk");
-    private static final Pattern ZIP_PATTERN = Pattern.compile("ODA_([A-Z]{2})_v\\d+\\.zip", Pattern.CASE_INSENSITIVE);
+    private static final Path NAR_DIR = Path.of("nar-data");
+    private static final Path REPORT_DIR = Path.of("build/reports/nar-bulk");
 
-    // ODA CSV column indices (0-based)
-    private static final int COL_STREET_NO = 5;
-    private static final int COL_STREET = 6;
-    private static final int COL_STR_NAME = 7;
-    private static final int COL_STR_TYPE = 8;
-    private static final int COL_STR_DIR = 9;
-    private static final int COL_UNIT = 10;
-    private static final int COL_CITY = 11;
-    private static final int COL_POSTAL_CODE = 12;
-    private static final int COL_CITY_PCS = 14;
+    // NAR CSV column indices (0-based)
+    private static final int COL_APT_NO_LABEL = 2;
+    private static final int COL_CIVIC_NO = 3;
+    private static final int COL_CIVIC_NO_SUFFIX = 4;
+    private static final int COL_MAIL_STREET_NAME = 13;
+    private static final int COL_MAIL_STREET_TYPE = 14;
+    private static final int COL_MAIL_STREET_DIR = 15;
+    private static final int COL_MAIL_MUN_NAME = 16;
+    private static final int COL_MAIL_PROV_ABVN = 17;
+    private static final int COL_MAIL_POSTAL_CODE = 18;
+    private static final int MIN_COLUMNS = 19;
+
+    /** Statistics Canada Standard Geographical Classification numeric codes → 2-letter province abbreviations. */
+    private static final Map<String, String> SGC_TO_PROV = Map.ofEntries(
+            Map.entry("10", "NL"),
+            Map.entry("11", "PE"),
+            Map.entry("12", "NS"),
+            Map.entry("13", "NB"),
+            Map.entry("24", "QC"),
+            Map.entry("35", "ON"),
+            Map.entry("46", "MB"),
+            Map.entry("47", "SK"),
+            Map.entry("48", "AB"),
+            Map.entry("59", "BC"),
+            Map.entry("60", "YT"),
+            Map.entry("61", "NT"),
+            Map.entry("62", "NU"));
+
+    /** Reverse mapping: 2-letter abbreviation → SGC code. */
+    private static final Map<String, String> PROV_TO_SGC;
+
+    static {
+        var map = new HashMap<String, String>();
+        SGC_TO_PROV.forEach((sgc, prov) -> map.put(prov, sgc));
+        PROV_TO_SGC = Map.copyOf(map);
+    }
+
+    private static final Pattern CSV_PATTERN =
+            Pattern.compile("Addresses/Address_(\\d{2})(?:_part_\\d+)?\\.csv", Pattern.CASE_INSENSITIVE);
 
     private static final int WORKER_THREADS = Runtime.getRuntime().availableProcessors();
     private static final int QUEUE_CAPACITY = 10_000;
 
+    /** Thread-local parser — avoids creating a new service per call while remaining thread-safe. */
     private static final ThreadLocal<AddressParserService> PARSER = ThreadLocal.withInitial(AddressParserService::new);
 
+    /** Shared progress counter — incremented by workers, read by progress reporter. */
     private final LongAdder processedCount = new LongAdder();
+
     private volatile long provinceStartTime;
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("odaZipFiles")
-    void validateProvince(String province, Path zipPath) throws Exception {
+    @MethodSource("narProvinces")
+    void validateProvince(String province, Path zipPath, List<String> csvEntries) throws Exception {
         var stats = new BulkStats(province);
         processedCount.reset();
 
         Runtime rt = Runtime.getRuntime();
         System.out.printf(
-                "=== %s: %s, %d worker threads, heap max=%dMB ===%n",
-                province, zipPath.getFileName(), WORKER_THREADS, rt.maxMemory() / (1024 * 1024));
+                "=== %s: %d CSV file(s), %d worker threads, heap max=%dMB ===%n",
+                province, csvEntries.size(), WORKER_THREADS, rt.maxMemory() / (1024 * 1024));
 
         provinceStartTime = System.currentTimeMillis();
 
+        // Bounded work queue + CallerRunsPolicy = natural backpressure.
+        // When the queue fills, the reader thread does parsing work instead of blocking idle.
         var executor = new ThreadPoolExecutor(
                 WORKER_THREADS,
                 WORKER_THREADS,
@@ -103,9 +135,12 @@ class OdaBulkValidationTest {
                 new ThreadPoolExecutor.CallerRunsPolicy());
 
         try {
-            processZip(zipPath, province, stats, executor);
+            for (String csvEntry : csvEntries) {
+                processCsvEntry(zipPath, csvEntry, province, stats, executor);
+            }
         } finally {
             executor.shutdown();
+            // Print progress while waiting for workers to drain
             while (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
                 printProgress(province, executor);
             }
@@ -115,7 +150,7 @@ class OdaBulkValidationTest {
         long total = processedCount.sum();
         System.out.printf(
                 "=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
-                province, total, elapsed, elapsed > 0 ? total / (elapsed / 1000.0) : 0);
+                province, total, elapsed, total / (elapsed / 1000.0));
 
         stats.printSummary(System.out);
         writeReport(province, stats);
@@ -137,12 +172,23 @@ class OdaBulkValidationTest {
                 province, count, rate, executor.getQueue().size(), usedMB);
     }
 
-    static Stream<Arguments> odaZipFiles() throws IOException {
-        if (!Files.isDirectory(ODA_DIR)) {
+    static Stream<Arguments> narProvinces() throws IOException {
+        if (!Files.isDirectory(NAR_DIR)) {
             return Stream.empty();
         }
 
-        String filter = System.getProperty("oda.provinces", "");
+        // Find all NAR zip files
+        List<Path> zips = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(NAR_DIR, "NAR_*.zip")) {
+            for (Path zip : stream) {
+                zips.add(zip);
+            }
+        }
+        if (zips.isEmpty()) {
+            return Stream.empty();
+        }
+
+        String filter = System.getProperty("nar.provinces", "");
         Set<String> allowedProvinces = new HashSet<>();
         if (!filter.isBlank()) {
             for (String p : filter.split(",")) {
@@ -150,38 +196,48 @@ class OdaBulkValidationTest {
             }
         }
 
-        List<Arguments> args = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(ODA_DIR, "ODA_*_v*.zip")) {
-            for (Path zip : stream) {
-                Matcher m = ZIP_PATTERN.matcher(zip.getFileName().toString());
+        // Scan zip contents and group CSV entries by province
+        // Use the first (or only) zip file found
+        Path zipPath = zips.get(0);
+        Map<String, List<String>> provinceCsvs = new TreeMap<>();
+
+        try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
+            var entries = zipFile.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                Matcher m = CSV_PATTERN.matcher(entry.getName());
                 if (m.matches()) {
-                    String province = m.group(1).toUpperCase();
-                    if (allowedProvinces.isEmpty() || allowedProvinces.contains(province)) {
-                        args.add(Arguments.of(province, zip));
+                    String sgcCode = m.group(1);
+                    String prov = SGC_TO_PROV.get(sgcCode);
+                    if (prov != null && (allowedProvinces.isEmpty() || allowedProvinces.contains(prov))) {
+                        provinceCsvs
+                                .computeIfAbsent(prov, k -> new ArrayList<>())
+                                .add(entry.getName());
                     }
                 }
             }
         }
 
-        args.sort(Comparator.comparing(a -> a.get()[0].toString()));
-        return args.stream();
+        // Sort CSV entries within each province so parts are processed in order
+        provinceCsvs.values().forEach(Collections::sort);
+
+        return provinceCsvs.entrySet().stream().map(e -> Arguments.of(e.getKey(), zipPath, e.getValue()));
     }
 
-    private void processZip(Path zipPath, String province, BulkStats stats, ThreadPoolExecutor executor)
+    private void processCsvEntry(
+            Path zipPath, String csvEntry, String province, BulkStats stats, ThreadPoolExecutor executor)
             throws Exception {
-        // Find the CSV entry matching ODA_XX_vN.csv (version-flexible)
-        Pattern csvPattern = Pattern.compile("ODA_" + province + "_v\\d+\\.csv", Pattern.CASE_INSENSITIVE);
+        System.out.printf("  Reading %s ...%n", csvEntry);
 
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
-            ZipEntry entry = zipFile.stream()
-                    .filter(e -> csvPattern.matcher(e.getName()).matches())
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException(
-                            "No CSV matching " + csvPattern.pattern() + " found in " + zipPath));
+            ZipEntry entry = zipFile.getEntry(csvEntry);
+            if (entry == null) {
+                throw new IllegalStateException("CSV entry '" + csvEntry + "' not found in " + zipPath);
+            }
 
             try (BufferedReader reader =
                     new BufferedReader(new InputStreamReader(zipFile.getInputStream(entry), StandardCharsets.UTF_8))) {
-                reader.readLine(); // skip header
+                String header = reader.readLine(); // skip header (may have BOM)
 
                 String line;
                 long lastProgressTime = System.currentTimeMillis();
@@ -192,6 +248,7 @@ class OdaBulkValidationTest {
                         processedCount.increment();
                     });
 
+                    // Print progress every 10 seconds
                     long now = System.currentTimeMillis();
                     if (now - lastProgressTime > 10_000) {
                         printProgress(province, executor);
@@ -202,41 +259,106 @@ class OdaBulkValidationTest {
         }
     }
 
+    /**
+     * Parse a CSV line respecting RFC 4180 quoted fields. Fields containing commas, quotes, or newlines are enclosed in
+     * double quotes; embedded quotes are escaped as "". A naive split(",") fails on NAR rows where CSD names contain
+     * commas (e.g., {@code "Kings, Subd. A"}).
+     */
+    private static String[] parseCsvLine(String line) {
+        List<String> fields = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inQuotes = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (inQuotes) {
+                if (c == '"') {
+                    if (i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                        current.append('"');
+                        i++; // skip escaped quote
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    current.append(c);
+                }
+            } else {
+                if (c == '"') {
+                    inQuotes = true;
+                } else if (c == ',') {
+                    fields.add(current.toString());
+                    current.setLength(0);
+                } else {
+                    current.append(c);
+                }
+            }
+        }
+        fields.add(current.toString());
+        return fields.toArray(new String[0]);
+    }
+
     private void processRow(String csvLine, String province, BulkStats stats) {
-        String[] fields = csvLine.split(",", -1);
-        if (fields.length <= COL_CITY_PCS) {
+        String[] fields = parseCsvLine(csvLine);
+        if (fields.length < MIN_COLUMNS) {
             stats.skip("short_row");
             return;
         }
 
-        String streetNo = fields[COL_STREET_NO].trim();
-        String street = fields[COL_STREET].trim();
+        String civicNo = fields[COL_CIVIC_NO].trim();
+        String civicSuffix = fields[COL_CIVIC_NO_SUFFIX].trim();
+        String mailStreetName = fields[COL_MAIL_STREET_NAME].trim();
+        String mailStreetType = fields[COL_MAIL_STREET_TYPE].trim();
+        String mailStreetDir = fields[COL_MAIL_STREET_DIR].trim();
+        String mailMunName = fields[COL_MAIL_MUN_NAME].trim();
+        String mailProvAbvn = fields[COL_MAIL_PROV_ABVN].trim();
+        String mailPostalCode = fields[COL_MAIL_POSTAL_CODE].trim();
+        String aptLabel = fields[COL_APT_NO_LABEL].trim();
 
-        if (streetNo.isEmpty() || street.isEmpty()) {
-            stats.skip("no_street_no_or_street");
+        // Skip rows without civic number or mailing street name — these are non-civic (PO box only)
+        if (civicNo.isEmpty() || mailStreetName.isEmpty()) {
+            stats.skip("no_civic_or_mail_street");
             return;
         }
 
-        String strName = fields[COL_STR_NAME].trim();
-        String strType = fields[COL_STR_TYPE].trim();
-        String strDir = fields[COL_STR_DIR].trim();
-        String unit = fields[COL_UNIT].trim();
-        String city = fields[COL_CITY].trim();
-        if (city.isEmpty()) {
-            city = fields[COL_CITY_PCS].trim();
+        // Build the street number (civic number + optional suffix)
+        String streetNo = civicNo;
+        if (!civicSuffix.isEmpty()) {
+            streetNo = civicNo + civicSuffix;
         }
-        String postalCode = fields[COL_POSTAL_CODE].trim();
 
-        // Construct a 3-line address
-        String deliveryLine = streetNo + " " + street;
+        // Build delivery line: [APT x] streetNo streetName [streetType] [streetDir]
+        StringBuilder deliveryLine = new StringBuilder();
+        if (!aptLabel.isEmpty()) {
+            deliveryLine.append("APT ").append(aptLabel).append(" ");
+        }
+        deliveryLine.append(streetNo);
+        deliveryLine.append(" ").append(mailStreetName);
+        if (!mailStreetType.isEmpty()) {
+            deliveryLine.append(" ").append(mailStreetType);
+        }
+        if (!mailStreetDir.isEmpty()) {
+            deliveryLine.append(" ").append(mailStreetDir);
+        }
 
+        // Build region line: municipality province  postalCode
         StringBuilder regionLine = new StringBuilder();
-        if (!city.isEmpty()) regionLine.append(city);
-        regionLine.append(" ").append(province);
-        if (!postalCode.isEmpty()) regionLine.append("  ").append(postalCode);
+        if (!mailMunName.isEmpty()) regionLine.append(mailMunName);
+        if (!mailProvAbvn.isEmpty()) {
+            if (!regionLine.isEmpty()) regionLine.append(" ");
+            regionLine.append(mailProvAbvn);
+        } else {
+            // Use the province from the test parameter if MAIL_PROV_ABVN is missing
+            if (!regionLine.isEmpty()) regionLine.append(" ");
+            regionLine.append(province);
+        }
+        if (!mailPostalCode.isEmpty()) {
+            if (!regionLine.isEmpty()) regionLine.append("  ");
+            regionLine.append(mailPostalCode);
+        }
 
+        String delivery = deliveryLine.toString();
         String fullAddress =
-                "TEST PERSON\n" + deliveryLine + "\n" + regionLine.toString().trim();
+                "TEST PERSON\n" + delivery + "\n" + regionLine.toString().trim();
 
         stats.total(province);
 
@@ -250,83 +372,93 @@ class OdaBulkValidationTest {
         stats.parseSuccess(province);
         var c = result.components();
 
-        // Street number
+        // Street number (civic number + suffix combined)
         if (c.streetNumber().equalsIgnoreCase(streetNo)) {
             stats.match("streetNo", province);
         } else {
-            stats.mismatch("streetNo", province, streetNo, c.streetNumber(), deliveryLine);
+            stats.mismatch("streetNo", province, streetNo, c.streetNumber(), delivery);
+        }
+
+        // Unit number (NEW — not available in ODA)
+        if (!aptLabel.isEmpty()) {
+            stats.hasField("unitNo", province);
+            if (c.unitNumber().equalsIgnoreCase(aptLabel)) {
+                stats.match("unitNo", province);
+            } else {
+                stats.mismatch("unitNo", province, aptLabel, c.unitNumber(), delivery);
+            }
         }
 
         // Street name
-        if (!strName.isEmpty()) {
+        if (!mailStreetName.isEmpty()) {
             stats.hasField("streetName", province);
-            if (c.streetName().equalsIgnoreCase(strName)) {
+            if (c.streetName().equalsIgnoreCase(mailStreetName)) {
                 stats.match("streetName", province);
             } else {
-                stats.mismatch("streetName", province, strName, c.streetName(), deliveryLine);
+                stats.mismatch("streetName", province, mailStreetName, c.streetName(), delivery);
             }
         }
 
         // Street type
-        if (!strType.isEmpty()) {
+        if (!mailStreetType.isEmpty()) {
             stats.hasField("streetType", province);
-            if (c.streetType().equalsIgnoreCase(strType)) {
+            if (c.streetType().equalsIgnoreCase(mailStreetType)) {
                 stats.match("streetType", province);
             } else if (!c.streetType().isEmpty()) {
-                // Type was detected but doesn't match — could be abbreviation vs full form
-                stats.mismatch("streetType", province, strType, c.streetType(), deliveryLine);
+                stats.mismatch("streetType", province, mailStreetType, c.streetType(), delivery);
             } else {
-                stats.mismatch("streetType", province, strType, "(empty)", deliveryLine);
+                stats.mismatch("streetType", province, mailStreetType, "(empty)", delivery);
             }
         }
 
         // Street direction
-        if (!strDir.isEmpty()) {
+        if (!mailStreetDir.isEmpty()) {
             stats.hasField("streetDir", province);
-            if (c.streetDirection().equalsIgnoreCase(strDir)) {
+            if (c.streetDirection().equalsIgnoreCase(mailStreetDir)) {
                 stats.match("streetDir", province);
             } else {
-                stats.mismatch("streetDir", province, strDir, c.streetDirection(), deliveryLine);
+                stats.mismatch("streetDir", province, mailStreetDir, c.streetDirection(), delivery);
             }
         }
 
         // Municipality
-        if (!city.isEmpty()) {
+        if (!mailMunName.isEmpty()) {
             stats.hasField("city", province);
-            if (c.municipality().equalsIgnoreCase(city)) {
+            if (c.municipality().equalsIgnoreCase(mailMunName)) {
                 stats.match("city", province);
             } else {
-                stats.mismatch("city", province, city, c.municipality(), deliveryLine);
+                stats.mismatch("city", province, mailMunName, c.municipality(), delivery);
             }
         }
 
         // Province
+        String expectedProv = mailProvAbvn.isEmpty() ? province : mailProvAbvn;
         stats.hasField("province", province);
-        if (c.province().equalsIgnoreCase(province)) {
+        if (c.province().equalsIgnoreCase(expectedProv)) {
             stats.match("province", province);
         } else {
-            stats.mismatch("province", province, province, c.province(), deliveryLine);
+            stats.mismatch("province", province, expectedProv, c.province(), delivery);
         }
 
         // Postal code
-        if (!postalCode.isEmpty()) {
+        if (!mailPostalCode.isEmpty()) {
             stats.hasField("postalCode", province);
-            String expectedPc = postalCode.replaceAll("\\s", "").toUpperCase();
+            String expectedPc = mailPostalCode.replaceAll("\\s", "").toUpperCase();
             String actualPc = c.postalCode().replaceAll("\\s", "").toUpperCase();
             if (expectedPc.equals(actualPc)) {
                 stats.match("postalCode", province);
             } else {
-                stats.mismatch("postalCode", province, postalCode, c.postalCode(), deliveryLine);
+                stats.mismatch("postalCode", province, mailPostalCode, c.postalCode(), delivery);
             }
         }
     }
 
     private void writeReport(String province, BulkStats stats) throws IOException {
         Files.createDirectories(REPORT_DIR);
-        Path reportFile = REPORT_DIR.resolve("ODA_" + province + "_report.txt");
+        Path reportFile = REPORT_DIR.resolve("NAR_" + province + "_report.txt");
 
         try (PrintStream out = new PrintStream(Files.newOutputStream(reportFile), true, StandardCharsets.UTF_8)) {
-            out.printf("ODA Bulk Validation Report — %s%n", province);
+            out.printf("NAR Bulk Validation Report — %s%n", province);
             out.printf("Generated: %s%n%n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
             stats.printSummary(out);
             stats.printSampleMismatches(out);
@@ -337,7 +469,7 @@ class OdaBulkValidationTest {
 
     private void writeMismatchCsv(String province, BulkStats stats) throws IOException {
         Files.createDirectories(REPORT_DIR);
-        Path csvFile = REPORT_DIR.resolve("ODA_" + province + "_mismatches.csv");
+        Path csvFile = REPORT_DIR.resolve("NAR_" + province + "_mismatches.csv");
 
         try (PrintStream out = new PrintStream(Files.newOutputStream(csvFile), true, StandardCharsets.UTF_8)) {
             out.println("field|province|expected|actual|delivery_line");
@@ -369,14 +501,17 @@ class OdaBulkValidationTest {
         private final ConcurrentMap<String, LongAdder> parseSuccesses = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, LongAdder> parseFailures = new ConcurrentHashMap<>();
 
+        // Per-field accuracy: field -> province -> count
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldHas = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMatches = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches =
                 new ConcurrentHashMap<>();
 
+        // Sample mismatches per field (for report) — bounded, so contention is minimal
         private final ConcurrentMap<String, List<String>> sampleMismatches = new ConcurrentHashMap<>();
         private static final int MAX_SAMPLES = 50;
 
+        // All mismatches for CSV export
         final Queue<Mismatch> allMismatches = new ConcurrentLinkedQueue<>();
 
         private final Queue<String> sampleParseFailures = new ConcurrentLinkedQueue<>();
@@ -443,7 +578,7 @@ class OdaBulkValidationTest {
 
             out.println();
             out.println("=".repeat(80));
-            out.println("BULK ODA VALIDATION SUMMARY");
+            out.println("BULK NAR VALIDATION SUMMARY");
             out.println("=".repeat(80));
             out.printf("Rows skipped:            %,d%n", skip);
             skipped.entrySet().stream()
@@ -456,10 +591,13 @@ class OdaBulkValidationTest {
             out.printf("Parse success:           %,d / %,d  (%.4f%%)%n", success, total, pct(success, total));
             out.printf("Parse failures:          %,d%n", fail);
 
+            // Per-field accuracy
             out.println("-".repeat(80));
-            out.println("FIELD ACCURACY (case-insensitive match against ODA ground truth)");
+            out.println("FIELD ACCURACY (case-insensitive match against NAR ground truth)");
             out.println("-".repeat(80));
-            String[] fields = {"streetNo", "streetName", "streetType", "streetDir", "city", "province", "postalCode"};
+            String[] fields = {
+                "streetNo", "unitNo", "streetName", "streetType", "streetDir", "city", "province", "postalCode"
+            };
             for (String field : fields) {
                 long has = sumField(fieldHas, field);
                 long ok = sumField(fieldMatches, field);
@@ -472,6 +610,7 @@ class OdaBulkValidationTest {
                 }
             }
 
+            // Per-province summary
             out.println("-".repeat(80));
             out.println("PER-PROVINCE PARSE RATE");
             out.println("-".repeat(80));
@@ -486,6 +625,7 @@ class OdaBulkValidationTest {
                         out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
                     });
 
+            // Top 20 unrecognized types
             if (!missedTypeFrequency.isEmpty()) {
                 out.println("-".repeat(80));
                 out.println("UNRECOGNIZED STREET TYPES (top 20)");
@@ -516,6 +656,7 @@ class OdaBulkValidationTest {
                 entry.getValue().forEach(m -> out.println("  " + m));
             }
 
+            // All unrecognized types
             if (!missedTypeFrequency.isEmpty()) {
                 out.println();
                 out.println("ALL UNRECOGNIZED STREET TYPES");

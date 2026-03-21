@@ -89,14 +89,26 @@ if (plugins.hasPlugin('eclipse')) {
 
 test {
     useJUnitPlatform {
+        def bulkTags = []
         if (!project.hasProperty('odaBulk')) {
             excludeTags 'oda-bulk'
         } else if (project.hasProperty('odaBulkOnly')) {
-            includeTags 'oda-bulk'
+            bulkTags << 'oda-bulk'
+        }
+        if (!project.hasProperty('narBulk')) {
+            excludeTags 'nar-bulk'
+        } else if (project.hasProperty('narBulkOnly')) {
+            bulkTags << 'nar-bulk'
+        }
+        if (!bulkTags.isEmpty()) {
+            includeTags(*bulkTags)
         }
     }
     if (project.hasProperty('odaBulk')) {
         systemProperty 'oda.provinces', project.findProperty('odaProvinces') ?: ''
+    }
+    if (project.hasProperty('narBulk')) {
+        systemProperty 'nar.provinces', project.findProperty('narProvinces') ?: ''
     }
 }
 

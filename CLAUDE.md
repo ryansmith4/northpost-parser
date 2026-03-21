@@ -29,10 +29,16 @@ Java 21 required. Gradle 9.4.0 (wrapper included).
 - Minimal lexer — produces structural tokens (WORD, NUMBER, POSTAL_CODE, etc.); all semantic interpretation is in the visitor
 
 ### Visitor (`AddressComponentVisitor`)
-- Comprehensive street type lookup tables for EN and FR
+- **Anchor-based line classification**: each pre-region line is classified by content anchors (delivery keywords, care-of markers, site info prefixes) rather than ordinal position; lines with no anchors default to addressee (first) or delivery (subsequent)
+- Region identification stays positional (last line) per Canada Post convention
+- Comprehensive street type lookup tables for EN and FR (includes Calgary/Edmonton abbreviations: GD, CA, CX, PS, PZ, LP, AL, HI, GY, GL, PW, CE, LK, GW; common types: PKWY, CREST, BLUFF, SPUR, ESTATE, GATEWAY, WALKWAY, OUTLOOK; NAR-validated: SIDERD, SIDEROAD, CONC, TLINE, CIRCT, VILLGE, PATHWAY, PTWAY, DRIVEWAY, DRWY, CTR, POINTE, HIGHLANDS, HGHLDS, HARBR, CROIS, RLE, SENT)
 - French type-first disambiguation (Rule 3: e.g., "RUE PRINCIPALE" vs "123 RUE DES ÉRABLES")
-- Direction detection (EN and FR including EST, OUEST, NORD, SUD)
+- Lettered/numbered avenue detection: when `AVENUE`/`AVE`/`AV` is followed by a single bare token (letter A-Z, number, or alphanumeric code), keeps the type word in the street name (`AVENUE P` → name=`AVENUE P`, type=`AVENUE`) instead of applying French type-first split. Direction detection is also guarded to prevent consuming the letter as a direction in 2-word patterns (`AVENUE N` → the N is the street letter, not North).
+- French type-as-name guard: when a French type-first split would produce a single-word name that is an unambiguous type abbreviation (RD, DR, ST, BLVD, BV, CRES, CRT, CT), falls through to English pattern instead (`AVENUE RD` → name=`AVENUE`, type=`RD`; `PROMENADE DR` → name=`PROMENADE`, type=`DR`). Full words like ACRES, PARK, LANE are excluded — they can be legitimate street names after a French type.
+- French article/adjective prefix guard (Rule 1 extension): when the word before a trailing type is a French article or adjective (GRAND, GRANDE, LE, LA, LES) AND the type is French (either French-only or shared EN+FR when province is QC), the type word is part of the proper name (`GRANDE ALLÉE` → name=`GRANDE ALLÉE`, no type; `GRAND BOULEVARD` in QC → name=`GRAND BOULEVARD`, no type). For shared types (BOULEVARD, PLACE), only fires when province is known to be QC — avoids regressing English-province streets like GRAND AVE. Per Commission de toponymie du Québec, these are complete odonyms where the generic is intentionally absent.
+- Direction detection (EN and FR including EST, OUEST, NORD, SUD) — suffix direction preferred over prefix when both present (suffix is unambiguous; prefix letter like E/N could be a street name abbreviation)
 - Province name normalization — full names ("ONTARIO"), informal abbreviations ("ONT.", "B.C."), and 2-letter codes
+- Smart prefix unit parsing: after a unit designator (APT, SUITE, UNIT, APP, etc.), uses look-ahead to distinguish unit values from civic numbers — ALPHANUMERIC tokens are always treated as unit identifiers; WORD and NUMBER tokens are unit values only when a civic number follows; a bare NUMBER with no following civic is treated as the street number itself. **Adjacency-based compound coalescing** detects adjacent NUMBER+SEPARATOR+NUMBER tokens (no whitespace: `1/2`, `405-2`, `1101.1`) and treats the compound as a single unit value when followed by a civic number
 - Handles informal patterns: fractional street numbers (123 1/2), dual civics (123/125), concatenated units (APT5), trailing units (123 MAIN ST APT 5), postal code on own line, comma-separated single-line addresses
 
 ### Service (`AddressParserService`)
@@ -72,6 +78,20 @@ Bulk test (`OdaBulkValidationTest`) validates the parser against full Statistics
 ```
 
 **Setup:** Download ODA zip files from [Statistics Canada ODA](https://www.statcan.gc.ca/en/lode/databases/oda) and place in `oda-data/` (gitignored). The test reads CSVs directly from the zip files — no unzipping needed. Reports are written to `build/reports/oda-bulk/ODA_XX_report.txt`.
+
+### NAR Bulk Validation
+
+Bulk test (`NarBulkValidationTest`) validates the parser against the Statistics Canada National Address Register (NAR). Tagged `nar-bulk`, excluded from normal builds. Tests all fields including **unit numbers** (not available in ODA). Uses MAIL_* fields (mailing-format addresses). NAR provides 17.3M+ addresses nationally with postal codes for all provinces.
+
+```bash
+# Run against all provinces in NAR zip
+./gradlew cleanTest test -PnarBulk -PnarBulkOnly
+
+# Run against specific province(s) — use 2-letter codes
+./gradlew cleanTest test -PnarBulk -PnarBulkOnly -PnarProvinces=AB,BC
+```
+
+**Setup:** Download a NAR zip from [Statistics Canada NAR](https://www150.statcan.gc.ca/n1/pub/46-26-0002/462600022022001-eng.htm), rename it to `NAR_YYYYMM.zip` (e.g., `NAR_202512.zip`), and place in `nar-data/` (gitignored). The zip contains CSVs organized by numeric province code (e.g., `Address_35.csv` = Ontario) which the test maps automatically. Reports are written to `build/reports/nar-bulk/NAR_XX_report.txt`.
 
 ## Key Dependencies
 
