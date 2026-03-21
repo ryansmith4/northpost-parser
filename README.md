@@ -108,12 +108,16 @@ Standard multi-line:          Single-line:
 
 With unit (multiple styles):  PO Box:
   APT 5 456 ELM AVE              PO BOX 1234 STN MAIN
-  5-456 ELM AVE                  CP 1234 SUCC CENTRE-VILLE
+  APT A 456 ELM AVE              CP 1234 SUCC CENTRE-VILLE
+  APT B15 456 ELM AVE
+  APT 1/2 456 ELM AVE
+  5-456 ELM AVE                Rural Route:
   456 ELM AVE APT 5
-  456 ELM AVE APT5             Rural Route:
+  456 ELM AVE APT5
                                   RR 2 STN MAIN
-Fractional civic:
-  123 1/2 MAIN STREET          General Delivery:
+Lettered avenue (SK/ON):       Fractional civic:
+  402 AVENUE P S                  123 1/2 MAIN STREET
+                               General Delivery:
                                   GD STN MAIN
 Dual civic:
   10/12 MAIN STREET            Care-of:

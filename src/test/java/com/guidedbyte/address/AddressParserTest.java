@@ -197,6 +197,63 @@ class AddressParserTest {
             assertThat(result.components().streetType()).isEmpty();
         }
 
+        // ---- Rule 1 (French): Article/adjective prefix — type word is part of the name ----
+
+        @Test
+        @DisplayName("Rule 1: GRANDE ALLÉE — allée is the name, not type")
+        void frenchPrefix_grandeAllee() {
+            var result = parser.parseAddress("JEAN DUPONT\n220 GRANDE ALLÉE E\nQUÉBEC QC G1R 2J1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRANDE ALLÉE");
+            assertThat(result.components().streetType()).isEmpty();
+            assertThat(result.components().streetDirection()).isEqualTo("E");
+        }
+
+        @Test
+        @DisplayName("Rule 1: GRANDE CÔTE — côte is French-only, whole phrase is the name")
+        void frenchPrefix_grandeCote() {
+            var result = parser.parseAddress("MARIE MARTIN\n1620 GRANDE CÔTE\nLANORAIE QC J0K 1E0");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRANDE CÔTE");
+            assertThat(result.components().streetType()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Rule 1: GRAND RANG — rang is French-only, whole phrase is the name")
+        void frenchPrefix_grandRang() {
+            var result = parser.parseAddress("JEAN DUPONT\n8605 GRAND RANG\nSAINT-HYACINTHE QC J2T 5H1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRAND RANG");
+            assertThat(result.components().streetType()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Rule 1: GRAND BOULEVARD in QC — proper name, no type")
+        void frenchPrefix_grandBoulevard_qc() {
+            var result = parser.parseAddress("JEAN DUPONT\n4039 GRAND BOULEVARD\nMONTRÉAL QC H1H 1H1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRAND BOULEVARD");
+            assertThat(result.components().streetType()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Rule 1: GRAND BOULEVARD in ON — splits normally (not QC)")
+        void frenchPrefix_grandBoulevard_on() {
+            var result = parser.parseAddress("JOHN SMITH\n100 GRAND BOULEVARD\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRAND");
+            assertThat(result.components().streetType()).isEqualTo("BOULEVARD");
+        }
+
+        @Test
+        @DisplayName("Rule 1: GRAND AVE — English-only type, guard does NOT fire")
+        void frenchPrefix_grandAve_englishType() {
+            var result = parser.parseAddress("JOHN SMITH\n100 GRAND AVE\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRAND");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+        }
+
         // ---- Rule 2: Two consecutive street types — last is type, first is name ----
 
         @Test
@@ -795,6 +852,37 @@ class AddressParserTest {
         }
 
         @Test
+        @DisplayName("Should return full street name (name + type + direction)")
+        void shouldReturnFullStreetName() {
+            var components = AddressComponents.builder()
+                    .streetName("EVERITT")
+                    .streetType("DRIVE")
+                    .streetDirection("NORTH")
+                    .build();
+
+            assertThat(components.getFullStreetName()).isPresent();
+            assertThat(components.getFullStreetName().get()).isEqualTo("EVERITT DRIVE NORTH");
+        }
+
+        @Test
+        @DisplayName("Full street name with name only (no type or direction)")
+        void fullStreetNameOnly() {
+            var components = AddressComponents.builder()
+                    .streetName("GRANDE ALLÉE")
+                    .build();
+
+            assertThat(components.getFullStreetName()).isPresent();
+            assertThat(components.getFullStreetName().get()).isEqualTo("GRANDE ALLÉE");
+        }
+
+        @Test
+        @DisplayName("Full street name is empty when no street name")
+        void fullStreetNameEmpty() {
+            var components = AddressComponents.builder().build();
+            assertThat(components.getFullStreetName()).isEmpty();
+        }
+
+        @Test
         @DisplayName("Should format complete address correctly")
         void shouldFormatCompleteAddressCorrectly() {
             var components = AddressComponents.builder()
@@ -1011,6 +1099,740 @@ class AddressParserTest {
             var normalized = components.normalize(NormalizationStrategy.FULL_FORM);
             assertThat(normalized.streetType()).isEmpty();
             assertThat(normalized.streetDirection()).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("Lettered/Numbered Avenue Parsing")
+    class LetteredAvenueTests {
+
+        @Test
+        @DisplayName("SK: AVENUE P with direction S")
+        void skAvenueP_directionS() {
+            var result = parser.parseAddress("402 AVENUE P S\nSASKATOON SK S7M 2L9");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE P");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+            assertThat(result.components().streetDirection()).isEqualTo("S");
+        }
+
+        @Test
+        @DisplayName("SK: AVENUE A with direction N")
+        void skAvenueA_directionN() {
+            var result = parser.parseAddress("135 AVENUE A N\nSASKATOON SK S7M 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE A");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+            assertThat(result.components().streetDirection()).isEqualTo("N");
+        }
+
+        @Test
+        @DisplayName("SK: AVENUE B with NE direction")
+        void skAvenueB_directionNE() {
+            var result = parser.parseAddress("5 AVENUE B NE\nMOOSE JAW SK S6H 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE B");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+            assertThat(result.components().streetDirection()).isEqualTo("NE");
+        }
+
+        @Test
+        @DisplayName("ON: AVENUE N (no direction — N is the street letter)")
+        void onAvenueN_noDirection() {
+            var result = parser.parseAddress("1309 AVENUE N\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE N");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("ON: AVENUE S (no direction — S is the street letter)")
+        void onAvenueS_noDirection() {
+            var result = parser.parseAddress("1351 AVENUE S\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE S");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("ON: AVENUE O (no direction — O is the street letter)")
+        void onAvenueO_noDirection() {
+            var result = parser.parseAddress("2047 AVENUE O\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE O");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+            assertThat(result.components().streetDirection()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("ON: AVENUE + number")
+        void onAvenueNumber() {
+            var result = parser.parseAddress("149 AVENUE 3\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE 3");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+        }
+
+        @Test
+        @DisplayName("ON: AVENUE + alphanumeric")
+        void onAvenueAlphanumeric() {
+            var result = parser.parseAddress("149 AVENUE 4A\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE 4A");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+        }
+
+        @Test
+        @DisplayName("AVE abbreviation")
+        void aveAbbreviation() {
+            var result = parser.parseAddress("402 AVE P S\nSASKATOON SK S7M 2L9");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVE P");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+            assertThat(result.components().streetDirection()).isEqualTo("S");
+        }
+
+        @Test
+        @DisplayName("With unit: APT + AVENUE letter")
+        void withUnit_aptAvenueLetter() {
+            var result = parser.parseAddress("APT 27 402 AVENUE P S\nSASKATOON SK S7M 2L9");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().unitNumber()).isEqualTo("27");
+            assertThat(result.components().streetNumber()).isEqualTo("402");
+            assertThat(result.components().streetName()).isEqualTo("AVENUE P");
+            assertThat(result.components().streetDirection()).isEqualTo("S");
+        }
+
+        @Test
+        @DisplayName("Regression: AVENUE DU PARC — French type-first split still works")
+        void regression_avenueDuParc() {
+            var result = parser.parseAddress("123 AVENUE DU PARC\nMONTRÉAL QC H3Z 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("DU PARC");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+        }
+
+        @Test
+        @DisplayName("Regression: RUE PRINCIPALE — French type-first unaffected")
+        void regression_ruePrincipale() {
+            var result = parser.parseAddress("123 RUE PRINCIPALE\nMONTRÉAL QC H3Z 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PRINCIPALE");
+            assertThat(result.components().streetType()).isEqualTo("RUE");
+        }
+
+        @Test
+        @DisplayName("Regression: RUE PRINCIPALE O — French with direction")
+        void regression_ruePrincipaleO() {
+            var result = parser.parseAddress("123 RUE PRINCIPALE O\nMONTRÉAL QC H2X 1Y4");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PRINCIPALE");
+            assertThat(result.components().streetType()).isEqualTo("RUE");
+            assertThat(result.components().streetDirection()).isEqualTo("O");
+        }
+
+        @Test
+        @DisplayName("Regression: ROUTE + number — QC convention unchanged")
+        void regression_routeNumber() {
+            var result = parser.parseAddress("781 ROUTE 465\nMONCTON NB E1C 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("465");
+            assertThat(result.components().streetType()).isEqualTo("ROUTE");
+        }
+
+        @Test
+        @DisplayName("Regression: normal AVE suffix — 2ND AVE N")
+        void regression_normalAveSuffix() {
+            var result = parser.parseAddress("123 2ND AVE N\nSASKATOON SK S7M 2L9");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("2ND");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+            assertThat(result.components().streetDirection()).isEqualTo("N");
+        }
+
+        @Test
+        @DisplayName("Regression: MAIN ST N — English pattern unaffected")
+        void regression_mainStN() {
+            var result = parser.parseAddress("123 MAIN ST N\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+            assertThat(result.components().streetDirection()).isEqualTo("N");
+        }
+    }
+
+    @Nested
+    @DisplayName("Hyphen and Ampersand Preservation in Street Names")
+    class HyphenAmpersandTests {
+
+        @Test
+        @DisplayName("Adjacent hyphenated ordinals preserved: 2E-ET-3E")
+        void adjacentHyphenOrdinals() {
+            var result = parser.parseAddress("JEAN DUPONT\n631 2E-ET-3E RANG DE COLOMBOURG\nQUÉBEC QC G1K 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("2E-ET-3E RANG DE COLOMBOURG");
+        }
+
+        @Test
+        @DisplayName("Adjacent hyphenated ordinals: 8E-ET-9E RANG")
+        void adjacentHyphenOrdinals8e9e() {
+            var result = parser.parseAddress("JEAN DUPONT\n234 8E-ET-9E RANG\nQUÉBEC QC G1K 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("8E-ET-9E");
+            assertThat(result.components().streetType()).isEqualTo("RANG");
+        }
+
+        @Test
+        @DisplayName("Adjacent hyphenated rang: DU 6E-RANG CH")
+        void adjacentHyphenRang() {
+            var result = parser.parseAddress("JEAN DUPONT\n100 DU 6E-RANG CH\nQUÉBEC QC G1K 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("DU 6E-RANG");
+            assertThat(result.components().streetType()).isEqualTo("CH");
+        }
+
+        @Test
+        @DisplayName("Concession with hyphenated numbers: 27-28 SIDERD")
+        void hyphenatedSideroad() {
+            var result = parser.parseAddress("115418 27-28 SIDERD\nINNISFIL ON L9S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("27-28");
+            assertThat(result.components().streetType()).isEqualTo("SIDERD");
+        }
+
+        @Test
+        @DisplayName("Ampersand preserved: 6 & 10 SIDERD")
+        void ampersandPreserved() {
+            var result = parser.parseAddress("JOHN SMITH\n182 6 & 10 SIDERD\nINNISFIL ON L9S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("6 & 10");
+            assertThat(result.components().streetType()).isEqualTo("SIDERD");
+        }
+
+        @Test
+        @DisplayName("Ampersand in highway: HWY 11 & 17")
+        void ampersandHighway() {
+            var result = parser.parseAddress("JOHN SMITH\n100 HWY 11 & 17\nTHUNDER BAY ON P7B 1A1");
+            assertThat(result.successful()).isTrue();
+            // HWY is not at the end so it's part of the name — parser preserves as-is
+            assertThat(result.components().streetName()).isEqualTo("HWY 11 & 17");
+        }
+
+        @Test
+        @DisplayName("Slash preserved in compound sideroad: 36/37 NOTTAWASAGA SIDERD")
+        void slashCompoundSideroad() {
+            var result = parser.parseAddress("7722 36/37 NOTTAWASAGA SIDERD\nINNISFIL ON L9S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("36/37 NOTTAWASAGA");
+            assertThat(result.components().streetType()).isEqualTo("SIDERD");
+        }
+
+        @Test
+        @DisplayName("Slash preserved in bilingual name: PETIT/LITTLE DOVER CH")
+        void slashBilingualName() {
+            var result = parser.parseAddress("73 PETIT/LITTLE DOVER CH\nMONCTON NB E1C 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PETIT/LITTLE DOVER");
+            assertThat(result.components().streetType()).isEqualTo("CH");
+        }
+
+        @Test
+        @DisplayName("Slash preserved in highway: HIGHWAY 11/17")
+        void slashHighway() {
+            var result = parser.parseAddress("512 HIGHWAY 11/17\nTHUNDER BAY ON P7B 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("HIGHWAY 11/17");
+        }
+
+        @Test
+        @DisplayName("Regression: existing hyphenated names still work (CÔTE-DES-NEIGES)")
+        void regressionHyphenatedFrenchName() {
+            var result = parser.parseAddress("456 CHEMIN DE LA CÔTE-DES-NEIGES\nMONTRÉAL QC H3Z 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetType()).isEqualTo("CHEMIN");
+            assertThat(result.components().streetName()).isEqualTo("DE LA CÔTE-DES-NEIGES");
+        }
+
+        @Test
+        @DisplayName("Regression: unit-hyphen-civic still works (10-123)")
+        void regressionUnitHyphenCivic() {
+            var result = parser.parseAddress("10-123 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("10");
+            assertThat(result.components().streetNumber()).isEqualTo("123");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+        }
+
+        @Test
+        @DisplayName("Regression: fractional civic still works (123 1/2)")
+        void regressionFractionalCivic() {
+            var result = parser.parseAddress("123 1/2 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().streetNumber()).isEqualTo("123 1/2");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+        }
+    }
+
+    @Nested
+    @DisplayName("NAR-Validated Street Type Abbreviations")
+    class NarStreetTypeTests {
+
+        @Test
+        @DisplayName("CROIS recognized as Croissant (QC)")
+        void croisRecognized() {
+            var result = parser.parseAddress("231 CHAUMONT CROIS\nLAVAL QC H7N 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("CHAUMONT");
+            assertThat(result.components().streetType()).isEqualTo("CROIS");
+        }
+
+        @Test
+        @DisplayName("SIDERD recognized as Sideroad (ON)")
+        void siderdRecognized() {
+            var result = parser.parseAddress("1038 25 SIDERD\nINNISFIL ON L9S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("25");
+            assertThat(result.components().streetType()).isEqualTo("SIDERD");
+        }
+
+        @Test
+        @DisplayName("CONC recognized as Concession (ON)")
+        void concRecognized() {
+            var result = parser.parseAddress("1518 6 CONC\nINNISFIL ON L9S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("6");
+            assertThat(result.components().streetType()).isEqualTo("CONC");
+        }
+
+        @Test
+        @DisplayName("CIRCT recognized as Circuit (ON)")
+        void circtRecognized() {
+            var result = parser.parseAddress("APT 109 45 GREENBRAE CIRCT\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GREENBRAE");
+            assertThat(result.components().streetType()).isEqualTo("CIRCT");
+        }
+
+        @Test
+        @DisplayName("VILLGE recognized as Village (AB)")
+        void villgeRecognized() {
+            var result = parser.parseAddress("93 GRANDIN VILLGE\nST. ALBERT AB T8N 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("GRANDIN");
+            assertThat(result.components().streetType()).isEqualTo("VILLGE");
+        }
+
+        @Test
+        @DisplayName("RLE recognized as Ruelle (QC)")
+        void rleRecognized() {
+            var result = parser.parseAddress("125 DE L'ÉQUERRE RLE\nMONTRÉAL QC H2X 1Y4");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetType()).isEqualTo("RLE");
+        }
+
+        @Test
+        @DisplayName("SENT recognized as Sentier (QC)")
+        void sentRecognized() {
+            var result = parser.parseAddress("418 DES FOUGÈRES SENT\nQUÉBEC QC G1K 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetType()).isEqualTo("SENT");
+        }
+
+        @Test
+        @DisplayName("TLINE recognized as Townline (ON)")
+        void tlineRecognized() {
+            var result = parser.parseAddress("36 ASHFIELD-HURON TLINE\nGODERICH ON N7A 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("ASHFIELD-HURON");
+            assertThat(result.components().streetType()).isEqualTo("TLINE");
+        }
+
+        @Test
+        @DisplayName("CTR recognized as Centre (AB)")
+        void ctrRecognized() {
+            var result = parser.parseAddress("APT 124 122 MAHOGANY CTR SE\nCALGARY AB T3M 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("MAHOGANY");
+            assertThat(result.components().streetType()).isEqualTo("CTR");
+            assertThat(result.components().streetDirection()).isEqualTo("SE");
+        }
+
+        @Test
+        @DisplayName("POINTE recognized (AB)")
+        void pointeRecognized() {
+            var result = parser.parseAddress("522 CALLAGHAN POINTE SW\nEDMONTON AB T6W 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("CALLAGHAN");
+            assertThat(result.components().streetType()).isEqualTo("POINTE");
+            assertThat(result.components().streetDirection()).isEqualTo("SW");
+        }
+
+        @Test
+        @DisplayName("HGHLDS recognized as Highlands (SK)")
+        void hghldsRecognized() {
+            var result = parser.parseAddress("1071 WASCANA HGHLDS\nREGINA SK S4V 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("WASCANA");
+            assertThat(result.components().streetType()).isEqualTo("HGHLDS");
+        }
+
+        @Test
+        @DisplayName("PTWAY recognized as Pathway (ON)")
+        void ptwayRecognized() {
+            var result = parser.parseAddress("100 RIVERSIDE PTWAY\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("RIVERSIDE");
+            assertThat(result.components().streetType()).isEqualTo("PTWAY");
+        }
+
+        @Test
+        @DisplayName("DRWY recognized as Driveway (ON)")
+        void drwyRecognized() {
+            var result = parser.parseAddress("APT 101 364 QUEEN ELIZABETH DRWY\nOTTAWA ON K1S 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("QUEEN ELIZABETH");
+            assertThat(result.components().streetType()).isEqualTo("DRWY");
+        }
+
+        @Test
+        @DisplayName("HARBR recognized as Harbour (AB)")
+        void harbrRecognized() {
+            var result = parser.parseAddress("55 ROYAL HARBR\nCALGARY AB T3M 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("ROYAL");
+            assertThat(result.components().streetType()).isEqualTo("HARBR");
+        }
+    }
+
+    @Nested
+    @DisplayName("French Type-as-Name Guard")
+    class FrenchTypeAsNameGuardTests {
+
+        @Test
+        @DisplayName("AVENUE RD → name=AVENUE, type=RD (Toronto's Avenue Road)")
+        void avenueRd() {
+            var result = parser.parseAddress("APT 912 38 AVENUE RD\nTORONTO ON M5R 2G2");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("AVENUE");
+            assertThat(result.components().streetType()).isEqualTo("RD");
+        }
+
+        @Test
+        @DisplayName("BOULEVARD DR → name=BOULEVARD, type=DR")
+        void boulevardDr() {
+            var result = parser.parseAddress("620 BOULEVARD DR\nSASKATOON SK S7M 2L9");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("BOULEVARD");
+            assertThat(result.components().streetType()).isEqualTo("DR");
+        }
+
+        @Test
+        @DisplayName("PROMENADE DR → name=PROMENADE, type=DR")
+        void promenadeDr() {
+            var result = parser.parseAddress("137 PROMENADE DR\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PROMENADE");
+            assertThat(result.components().streetType()).isEqualTo("DR");
+        }
+
+        @Test
+        @DisplayName("COTE BLVD → name=COTE, type=BLVD")
+        void coteBlvd() {
+            var result = parser.parseAddress("888 COTE BLVD\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("COTE");
+            assertThat(result.components().streetType()).isEqualTo("BLVD");
+        }
+
+        @Test
+        @DisplayName("PROMENADE CIR → name=PROMENADE, type=CIR")
+        void promenadeCir() {
+            var result = parser.parseAddress("APT 1801 88 PROMENADE CIR\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PROMENADE");
+            assertThat(result.components().streetType()).isEqualTo("CIR");
+        }
+
+        @Test
+        @DisplayName("COTE AVE → name=COTE, type=AVE")
+        void coteAve() {
+            var result = parser.parseAddress("121 COTE AVE\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("COTE");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+        }
+
+        @Test
+        @DisplayName("JARDIN PVT → name=JARDIN, type=PVT")
+        void jardinPvt() {
+            var result = parser.parseAddress("40 JARDIN PVT\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("JARDIN");
+            assertThat(result.components().streetType()).isEqualTo("PVT");
+        }
+
+        @Test
+        @DisplayName("COTE AVE. — period on type doesn't prevent guard")
+        void coteAvePeriod() {
+            var result = parser.parseAddress("121 COTE AVE.\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("COTE");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+        }
+
+        @Test
+        @DisplayName("PROMENADE PL. — period on type doesn't prevent guard")
+        void promenadePlPeriod() {
+            var result = parser.parseAddress("50 PROMENADE PL.\nTORONTO ON M5V 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PROMENADE");
+            assertThat(result.components().streetType()).isEqualTo("PL");
+        }
+
+        @Test
+        @DisplayName("Regression: ROUTE ACRES — ACRES is a full word, not in guard")
+        void regression_routeAcres() {
+            var result = parser.parseAddress("105 ROUTE ACRES\nMONTREAL QC H1H 1H1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("ACRES");
+            assertThat(result.components().streetType()).isEqualTo("ROUTE");
+        }
+
+        @Test
+        @DisplayName("Regression: AVENUE DU PARC unchanged (multi-word name)")
+        void regression_avenueDuParc() {
+            var result = parser.parseAddress("123 AVENUE DU PARC\nMONTRÉAL QC H3Z 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("DU PARC");
+            assertThat(result.components().streetType()).isEqualTo("AVENUE");
+        }
+
+        @Test
+        @DisplayName("Regression: RUE PRINCIPALE unchanged")
+        void regression_ruePrincipale() {
+            var result = parser.parseAddress("123 RUE PRINCIPALE\nMONTRÉAL QC H3Z 2Y7");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("PRINCIPALE");
+            assertThat(result.components().streetType()).isEqualTo("RUE");
+        }
+
+        @Test
+        @DisplayName("Regression: ROUTE 465 unchanged (QC convention)")
+        void regression_route465() {
+            var result = parser.parseAddress("781 ROUTE 465\nMONCTON NB E1C 1A1");
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().streetName()).isEqualTo("465");
+            assertThat(result.components().streetType()).isEqualTo("ROUTE");
+        }
+    }
+
+    @Nested
+    @DisplayName("Compound Unit Value Parsing")
+    class CompoundUnitValueTests {
+
+        @Test
+        @DisplayName("Should parse fractional unit (1/2)")
+        void shouldParseFractionalUnit() {
+            var result = parser.parseAddress("APT 1/2 85 EDWARD ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("1/2");
+            assertThat(result.components().streetNumber()).isEqualTo("85");
+            assertThat(result.components().streetName()).isEqualTo("EDWARD");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should parse hyphenated unit (405-2)")
+        void shouldParseHyphenatedUnit() {
+            var result = parser.parseAddress("APT 405-2 123 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("405-2");
+            assertThat(result.components().streetNumber()).isEqualTo("123");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should parse dotted unit (1101.1)")
+        void shouldParseDottedUnit() {
+            var result = parser.parseAddress("APT 1101.1 229 LINDEN AVE\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("1101.1");
+            assertThat(result.components().streetNumber()).isEqualTo("229");
+            assertThat(result.components().streetName()).isEqualTo("LINDEN");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+        }
+
+        @Test
+        @DisplayName("Should treat compound with no following civic as street number")
+        void shouldTreatCompoundNoFollowingCivicAsStreetNumber() {
+            var result = parser.parseAddress("APT 1/2 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEmpty();
+            assertThat(result.components().streetNumber()).isEqualTo("1/2");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+        }
+
+        @Test
+        @DisplayName("Regression: simple numeric unit still works")
+        void regressionSimpleNumericUnit() {
+            var result = parser.parseAddress("APT 5 394 QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("5");
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Regression: bare designator number is civic, not unit")
+        void regressionBareDesignatorNumber() {
+            var result = parser.parseAddress("APT 394 QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEmpty();
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Regression: fraction after civic number is street number, not unit")
+        void regressionFractionAfterCivic() {
+            var result = parser.parseAddress("123 1/2 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().streetNumber()).isEqualTo("123 1/2");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Regression: unit-hyphen-civic pattern still works")
+        void regressionUnitHyphenCivic() {
+            var result = parser.parseAddress("10-123 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("10");
+            assertThat(result.components().streetNumber()).isEqualTo("123");
+            assertThat(result.components().streetName()).isEqualTo("MAIN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+    }
+
+    @Nested
+    @DisplayName("Prefix Unit Parsing")
+    class PrefixUnitParsingTests {
+
+        @Test
+        @DisplayName("Should parse letter unit after designator")
+        void shouldParseLetterUnit() {
+            var result = parser.parseAddress("APT A 394 QUEEN ST\nCHARLOTTETOWN PE C1A 1A1");
+            assertThat(result.components().unitNumber()).isEqualTo("A");
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should parse alphanumeric code unit (B15)")
+        void shouldParseAlphanumericCodeUnit() {
+            var result = parser.parseAddress("APT B15 20 DUVAR CRT\nCHARLOTTETOWN PE C1A 1A1");
+            assertThat(result.components().unitNumber()).isEqualTo("B15");
+            assertThat(result.components().streetNumber()).isEqualTo("20");
+            assertThat(result.components().streetName()).isEqualTo("DUVAR");
+            assertThat(result.components().streetType()).isEqualTo("CRT");
+        }
+
+        @Test
+        @DisplayName("Should parse long code unit (K102)")
+        void shouldParseLongCodeUnit() {
+            var result = parser.parseAddress("APT K102 229 LINDEN AVE\nCHARLOTTETOWN PE C1A 1A1");
+            assertThat(result.components().unitNumber()).isEqualTo("K102");
+            assertThat(result.components().streetNumber()).isEqualTo("229");
+            assertThat(result.components().streetName()).isEqualTo("LINDEN");
+            assertThat(result.components().streetType()).isEqualTo("AVE");
+        }
+
+        @Test
+        @DisplayName("Should parse digit-alpha unit (5A)")
+        void shouldParseDigitAlphaUnit() {
+            var result = parser.parseAddress("APT 5A 394 QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("5A");
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should parse numeric unit with civic number")
+        void shouldParseNumericUnitWithCivic() {
+            var result = parser.parseAddress("APT 5 394 QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("5");
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should treat bare designator number as civic, not unit")
+        void shouldTreatBareDesignatorNumberAsCivic() {
+            var result = parser.parseAddress("APT 394 QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEmpty();
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should handle bare designator with no civic number")
+        void shouldHandleBareDesignatorNoCivic() {
+            var result = parser.parseAddress("APT QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEmpty();
+            assertThat(result.components().streetNumber()).isEmpty();
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should parse alphanum unit with no civic")
+        void shouldParseAlphanumUnitNoCivic() {
+            var result = parser.parseAddress("APT 5A QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("5A");
+            assertThat(result.components().streetNumber()).isEmpty();
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should treat direction letter as unit when followed by civic")
+        void shouldTreatDirectionLetterAsUnit() {
+            var result = parser.parseAddress("APT E 394 QUEEN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("E");
+            assertThat(result.components().streetNumber()).isEqualTo("394");
+            assertThat(result.components().streetName()).isEqualTo("QUEEN");
+            assertThat(result.components().streetType()).isEqualTo("ST");
+        }
+
+        @Test
+        @DisplayName("Should parse French designator with letter unit")
+        void shouldParseFrenchDesignatorLetterUnit() {
+            var result = parser.parseAddress("APP A 123 RUE PRINCIPALE\nMONTRÉAL QC H3Z 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("A");
+            assertThat(result.components().streetNumber()).isEqualTo("123");
+        }
+
+        @Test
+        @DisplayName("Should parse UNIT designator with letter")
+        void shouldParseUnitDesignatorLetter() {
+            var result = parser.parseAddress("UNIT B 456 ELM AVE\nVANCOUVER BC V6B 2K1");
+            assertThat(result.components().unitNumber()).isEqualTo("B");
+            assertThat(result.components().streetNumber()).isEqualTo("456");
+        }
+
+        @Test
+        @DisplayName("Should parse SUITE designator with numeric unit")
+        void shouldParseSuiteDesignatorNumeric() {
+            var result = parser.parseAddress("SUITE 200 123 MAIN ST\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("200");
+            assertThat(result.components().streetNumber()).isEqualTo("123");
+        }
+
+        @Test
+        @DisplayName("Should parse PH code unit")
+        void shouldParsePhCodeUnit() {
+            var result = parser.parseAddress("APT PH01 5 STRAWBERRY LANE\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("PH01");
+            assertThat(result.components().streetNumber()).isEqualTo("5");
         }
     }
 }

@@ -11,6 +11,9 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -97,19 +100,53 @@ class NarBulkValidationTest {
     private static final Pattern CSV_PATTERN =
             Pattern.compile("Addresses/Address_(\\d{2})(?:_part_\\d+)?\\.csv", Pattern.CASE_INSENSITIVE);
 
-    private final AddressParserService parser = new AddressParserService();
+    private static final int WORKER_THREADS = Runtime.getRuntime().availableProcessors();
+    private static final int QUEUE_CAPACITY = 10_000;
+
+    /** Thread-local parser — avoids creating a new service per call while remaining thread-safe. */
+    private static final ThreadLocal<AddressParserService> PARSER =
+            ThreadLocal.withInitial(AddressParserService::new);
+
+    /** Shared progress counter — incremented by workers, read by progress reporter. */
+    private final LongAdder processedCount = new LongAdder();
+    private volatile long provinceStartTime;
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("narProvinces")
     void validateProvince(String province, Path zipPath, List<String> csvEntries) throws Exception {
         var stats = new BulkStats(province);
+        processedCount.reset();
 
-        System.out.printf("=== Processing %s addresses from %s (%d CSV file(s)) ===%n", province, zipPath.getFileName(),
-                csvEntries.size());
+        Runtime rt = Runtime.getRuntime();
+        System.out.printf("=== %s: %d CSV file(s), %d worker threads, heap max=%dMB ===%n",
+                province, csvEntries.size(), WORKER_THREADS, rt.maxMemory() / (1024 * 1024));
 
-        for (String csvEntry : csvEntries) {
-            processCsvEntry(zipPath, csvEntry, province, stats);
+        provinceStartTime = System.currentTimeMillis();
+
+        // Bounded work queue + CallerRunsPolicy = natural backpressure.
+        // When the queue fills, the reader thread does parsing work instead of blocking idle.
+        var executor = new ThreadPoolExecutor(
+                WORKER_THREADS, WORKER_THREADS,
+                0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(QUEUE_CAPACITY),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+
+        try {
+            for (String csvEntry : csvEntries) {
+                processCsvEntry(zipPath, csvEntry, province, stats, executor);
+            }
+        } finally {
+            executor.shutdown();
+            // Print progress while waiting for workers to drain
+            while (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                printProgress(province, executor);
+            }
         }
+
+        long elapsed = System.currentTimeMillis() - provinceStartTime;
+        long total = processedCount.sum();
+        System.out.printf("=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
+                province, total, elapsed, total / (elapsed / 1000.0));
 
         stats.printSummary(System.out);
         writeReport(province, stats);
@@ -118,6 +155,16 @@ class NarBulkValidationTest {
         assertThat(stats.parseSuccessRate())
                 .as("Parse success rate for %s (actual: %.2f%%)", province, stats.parseSuccessRate() * 100)
                 .isGreaterThanOrEqualTo(0.95);
+    }
+
+    private void printProgress(String province, ThreadPoolExecutor executor) {
+        long count = processedCount.sum();
+        long elapsed = System.currentTimeMillis() - provinceStartTime;
+        double rate = elapsed > 0 ? count / (elapsed / 1000.0) : 0;
+        Runtime rt = Runtime.getRuntime();
+        long usedMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
+        System.out.printf("  %s: %,d processed (%.0f addr/sec, queue=%d, heap=%dMB)%n",
+                province, count, rate, executor.getQueue().size(), usedMB);
     }
 
     static Stream<Arguments> narProvinces() throws IOException {
@@ -171,8 +218,10 @@ class NarBulkValidationTest {
                 .map(e -> Arguments.of(e.getKey(), zipPath, e.getValue()));
     }
 
-    private void processCsvEntry(Path zipPath, String csvEntry, String province, BulkStats stats) throws Exception {
-        long startTime = System.currentTimeMillis();
+    private void processCsvEntry(
+            Path zipPath, String csvEntry, String province, BulkStats stats, ThreadPoolExecutor executor)
+            throws Exception {
+        System.out.printf("  Reading %s ...%n", csvEntry);
 
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
             ZipEntry entry = zipFile.getEntry(csvEntry);
@@ -185,26 +234,65 @@ class NarBulkValidationTest {
                 String header = reader.readLine(); // skip header (may have BOM)
 
                 String line;
-                int lineNo = 1;
+                long lastProgressTime = System.currentTimeMillis();
                 while ((line = reader.readLine()) != null) {
-                    lineNo++;
-                    processRow(line, province, stats);
+                    final String csvLine = line;
+                    executor.execute(() -> {
+                        processRow(csvLine, province, stats);
+                        processedCount.increment();
+                    });
 
-                    if (lineNo % 100_000 == 0) {
-                        long elapsed = System.currentTimeMillis() - startTime;
-                        System.out.printf("  %s: %,d rows (%,d ms, %.0f rows/sec)%n", csvEntry, lineNo, elapsed,
-                                lineNo / (elapsed / 1000.0));
+                    // Print progress every 10 seconds
+                    long now = System.currentTimeMillis();
+                    if (now - lastProgressTime > 10_000) {
+                        printProgress(province, executor);
+                        lastProgressTime = now;
                     }
                 }
             }
         }
+    }
 
-        long elapsed = System.currentTimeMillis() - startTime;
-        System.out.printf("  %s done in %,d ms%n", csvEntry, elapsed);
+    /**
+     * Parse a CSV line respecting RFC 4180 quoted fields. Fields containing commas, quotes, or newlines
+     * are enclosed in double quotes; embedded quotes are escaped as "". A naive split(",") fails on
+     * NAR rows where CSD names contain commas (e.g., {@code "Kings, Subd. A"}).
+     */
+    private static String[] parseCsvLine(String line) {
+        List<String> fields = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inQuotes = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (inQuotes) {
+                if (c == '"') {
+                    if (i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                        current.append('"');
+                        i++; // skip escaped quote
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    current.append(c);
+                }
+            } else {
+                if (c == '"') {
+                    inQuotes = true;
+                } else if (c == ',') {
+                    fields.add(current.toString());
+                    current.setLength(0);
+                } else {
+                    current.append(c);
+                }
+            }
+        }
+        fields.add(current.toString());
+        return fields.toArray(new String[0]);
     }
 
     private void processRow(String csvLine, String province, BulkStats stats) {
-        String[] fields = csvLine.split(",", -1);
+        String[] fields = parseCsvLine(csvLine);
         if (fields.length < MIN_COLUMNS) {
             stats.skip("short_row");
             return;
@@ -267,7 +355,7 @@ class NarBulkValidationTest {
 
         stats.total(province);
 
-        var result = parser.parseAddress(fullAddress);
+        var result = PARSER.get().parseAddress(fullAddress);
 
         if (!result.successful()) {
             stats.parseFail(province, fullAddress, result.errors());
@@ -401,25 +489,26 @@ class NarBulkValidationTest {
 
     static class BulkStats {
         final String currentProvince;
-        final Map<String, Integer> totalByProvince = new LinkedHashMap<>();
-        private final Map<String, Integer> skipped = new HashMap<>();
-        private final Map<String, Integer> parseSuccesses = new LinkedHashMap<>();
-        private final Map<String, Integer> parseFailures = new HashMap<>();
+        final ConcurrentMap<String, LongAdder> totalByProvince = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, LongAdder> skipped = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, LongAdder> parseSuccesses = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, LongAdder> parseFailures = new ConcurrentHashMap<>();
 
         // Per-field accuracy: field -> province -> count
-        private final Map<String, Map<String, Integer>> fieldHas = new HashMap<>();
-        private final Map<String, Map<String, Integer>> fieldMatches = new HashMap<>();
-        private final Map<String, Map<String, Integer>> fieldMismatches = new HashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldHas = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMatches = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches = new ConcurrentHashMap<>();
 
-        // Sample mismatches per field (for report)
-        private final Map<String, List<String>> sampleMismatches = new LinkedHashMap<>();
+        // Sample mismatches per field (for report) — bounded, so contention is minimal
+        private final ConcurrentMap<String, List<String>> sampleMismatches = new ConcurrentHashMap<>();
         private static final int MAX_SAMPLES = 50;
 
         // All mismatches for CSV export
-        final List<Mismatch> allMismatches = new ArrayList<>();
+        final Queue<Mismatch> allMismatches = new ConcurrentLinkedQueue<>();
 
-        private final List<String> sampleParseFailures = new ArrayList<>();
-        private final Map<String, Integer> missedTypeFrequency = new HashMap<>();
+        private final Queue<String> sampleParseFailures = new ConcurrentLinkedQueue<>();
+        private final ConcurrentMap<String, LongAdder> missedTypeFrequency = new ConcurrentHashMap<>();
+        private final AtomicInteger parseFailureSampleCount = new AtomicInteger();
 
         BulkStats(String province) {
             this.currentProvince = province;
@@ -439,28 +528,26 @@ class NarBulkValidationTest {
 
         void parseFail(String p, String addr, List<String> errors) {
             inc(parseFailures, p);
-            if (sampleParseFailures.size() < MAX_SAMPLES) {
+            if (parseFailureSampleCount.getAndIncrement() < MAX_SAMPLES) {
                 sampleParseFailures.add(addr.replace("\n", " | ") + "  errors=" + errors);
             }
         }
 
         void hasField(String field, String p) {
-            fieldHas.computeIfAbsent(field, k -> new HashMap<>());
-            inc(fieldHas.get(field), p);
+            inc(fieldHas.computeIfAbsent(field, k -> new ConcurrentHashMap<>()), p);
         }
 
         void match(String field, String p) {
-            fieldMatches.computeIfAbsent(field, k -> new HashMap<>());
-            inc(fieldMatches.get(field), p);
+            inc(fieldMatches.computeIfAbsent(field, k -> new ConcurrentHashMap<>()), p);
         }
 
         void mismatch(String field, String p, String expected, String actual, String deliveryLine) {
-            fieldMismatches.computeIfAbsent(field, k -> new HashMap<>());
-            inc(fieldMismatches.get(field), p);
+            inc(fieldMismatches.computeIfAbsent(field, k -> new ConcurrentHashMap<>()), p);
 
             allMismatches.add(new Mismatch(field, p, expected, actual, deliveryLine));
 
-            List<String> samples = sampleMismatches.computeIfAbsent(field, k -> new ArrayList<>());
+            List<String> samples =
+                    sampleMismatches.computeIfAbsent(field, k -> Collections.synchronizedList(new ArrayList<>()));
             if (samples.size() < MAX_SAMPLES) {
                 samples.add("expected='" + expected + "' actual='" + actual + "'  line=" + deliveryLine);
             }
@@ -471,15 +558,15 @@ class NarBulkValidationTest {
         }
 
         double parseSuccessRate() {
-            int t = sum(totalByProvince);
+            long t = sum(totalByProvince);
             return t == 0 ? 0 : (double) sum(parseSuccesses) / t;
         }
 
         void printSummary(PrintStream out) {
-            int total = sum(totalByProvince);
-            int skip = sum(skipped);
-            int success = sum(parseSuccesses);
-            int fail = sum(parseFailures);
+            long total = sum(totalByProvince);
+            long skip = sum(skipped);
+            long success = sum(parseSuccesses);
+            long fail = sum(parseFailures);
 
             out.println();
             out.println("=".repeat(80));
@@ -487,8 +574,10 @@ class NarBulkValidationTest {
             out.println("=".repeat(80));
             out.printf("Rows skipped:            %,d%n", skip);
             skipped.entrySet().stream()
-                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                    .forEach(e -> out.printf("  %-30s %,d%n", e.getKey(), e.getValue()));
+                    .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                                    Comparator.comparingLong(LongAdder::sum))
+                            .reversed())
+                    .forEach(e -> out.printf("  %-30s %,d%n", e.getKey(), e.getValue().sum()));
             out.printf("Rows tested:             %,d%n", total);
             out.println("-".repeat(80));
             out.printf("Parse success:           %,d / %,d  (%.4f%%)%n", success, total, pct(success, total));
@@ -502,11 +591,11 @@ class NarBulkValidationTest {
                 "streetNo", "unitNo", "streetName", "streetType", "streetDir", "city", "province", "postalCode"
             };
             for (String field : fields) {
-                int has = sumField(fieldHas, field);
-                int ok = sumField(fieldMatches, field);
-                int miss = sumField(fieldMismatches, field);
+                long has = sumField(fieldHas, field);
+                long ok = sumField(fieldMatches, field);
+                long miss = sumField(fieldMismatches, field);
                 if (has > 0 || "streetNo".equals(field)) {
-                    int denom = "streetNo".equals(field) ? success : has;
+                    long denom = "streetNo".equals(field) ? success : has;
                     out.printf(
                             "  %-15s  %,9d / %,9d  (%7.3f%%)  mismatches: %,d%n",
                             field, ok, denom, pct(ok, denom), miss);
@@ -517,12 +606,14 @@ class NarBulkValidationTest {
             out.println("-".repeat(80));
             out.println("PER-PROVINCE PARSE RATE");
             out.println("-".repeat(80));
-            for (var entry : totalByProvince.entrySet()) {
-                String p = entry.getKey();
-                int pt = entry.getValue();
-                int ps = parseSuccesses.getOrDefault(p, 0);
-                out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
-            }
+            totalByProvince.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(entry -> {
+                        String p = entry.getKey();
+                        long pt = entry.getValue().sum();
+                        long ps = parseSuccesses.containsKey(p) ? parseSuccesses.get(p).sum() : 0;
+                        out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
+                    });
 
             // Top 20 unrecognized types
             if (!missedTypeFrequency.isEmpty()) {
@@ -530,9 +621,11 @@ class NarBulkValidationTest {
                 out.println("UNRECOGNIZED STREET TYPES (top 20)");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                                        Comparator.comparingLong(LongAdder::sum))
+                                .reversed())
                         .limit(20)
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue()));
+                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
 
             out.println("=".repeat(80));
@@ -559,25 +652,28 @@ class NarBulkValidationTest {
                 out.println("ALL UNRECOGNIZED STREET TYPES");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue()));
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                                        Comparator.comparingLong(LongAdder::sum))
+                                .reversed())
+                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
         }
 
-        private static int sumField(Map<String, Map<String, Integer>> fieldMap, String field) {
-            Map<String, Integer> m = fieldMap.get(field);
+        private static long sumField(
+                ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMap, String field) {
+            ConcurrentMap<String, LongAdder> m = fieldMap.get(field);
             return m == null ? 0 : sum(m);
         }
 
-        private static void inc(Map<String, Integer> m, String k) {
-            m.merge(k, 1, Integer::sum);
+        private static void inc(ConcurrentMap<String, LongAdder> m, String k) {
+            m.computeIfAbsent(k, x -> new LongAdder()).increment();
         }
 
-        private static int sum(Map<String, Integer> m) {
-            return m.values().stream().mapToInt(i -> i).sum();
+        private static long sum(ConcurrentMap<String, LongAdder> m) {
+            return m.values().stream().mapToLong(LongAdder::sum).sum();
         }
 
-        private static double pct(int n, int d) {
+        private static double pct(long n, long d) {
             return d == 0 ? 0 : (double) n / d * 100;
         }
     }

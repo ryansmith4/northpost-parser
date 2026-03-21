@@ -11,6 +11,9 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -70,15 +73,46 @@ class OdaBulkValidationTest {
     private static final int COL_POSTAL_CODE = 12;
     private static final int COL_CITY_PCS = 14;
 
-    private final AddressParserService parser = new AddressParserService();
+    private static final int WORKER_THREADS = Runtime.getRuntime().availableProcessors();
+    private static final int QUEUE_CAPACITY = 10_000;
+
+    private static final ThreadLocal<AddressParserService> PARSER =
+            ThreadLocal.withInitial(AddressParserService::new);
+
+    private final LongAdder processedCount = new LongAdder();
+    private volatile long provinceStartTime;
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("odaZipFiles")
     void validateProvince(String province, Path zipPath) throws Exception {
         var stats = new BulkStats(province);
+        processedCount.reset();
 
-        System.out.printf("=== Processing %s addresses from %s ===%n", province, zipPath.getFileName());
-        processZip(zipPath, province, stats);
+        Runtime rt = Runtime.getRuntime();
+        System.out.printf("=== %s: %s, %d worker threads, heap max=%dMB ===%n",
+                province, zipPath.getFileName(), WORKER_THREADS, rt.maxMemory() / (1024 * 1024));
+
+        provinceStartTime = System.currentTimeMillis();
+
+        var executor = new ThreadPoolExecutor(
+                WORKER_THREADS, WORKER_THREADS,
+                0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(QUEUE_CAPACITY),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+
+        try {
+            processZip(zipPath, province, stats, executor);
+        } finally {
+            executor.shutdown();
+            while (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                printProgress(province, executor);
+            }
+        }
+
+        long elapsed = System.currentTimeMillis() - provinceStartTime;
+        long total = processedCount.sum();
+        System.out.printf("=== %s complete: %,d addresses in %,d ms (%.0f addr/sec) ===%n",
+                province, total, elapsed, elapsed > 0 ? total / (elapsed / 1000.0) : 0);
 
         stats.printSummary(System.out);
         writeReport(province, stats);
@@ -87,6 +121,16 @@ class OdaBulkValidationTest {
         assertThat(stats.parseSuccessRate())
                 .as("Parse success rate for %s (actual: %.2f%%)", province, stats.parseSuccessRate() * 100)
                 .isGreaterThanOrEqualTo(0.95);
+    }
+
+    private void printProgress(String province, ThreadPoolExecutor executor) {
+        long count = processedCount.sum();
+        long elapsed = System.currentTimeMillis() - provinceStartTime;
+        double rate = elapsed > 0 ? count / (elapsed / 1000.0) : 0;
+        Runtime rt = Runtime.getRuntime();
+        long usedMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
+        System.out.printf("  %s: %,d processed (%.0f addr/sec, queue=%d, heap=%dMB)%n",
+                province, count, rate, executor.getQueue().size(), usedMB);
     }
 
     static Stream<Arguments> odaZipFiles() throws IOException {
@@ -119,8 +163,8 @@ class OdaBulkValidationTest {
         return args.stream();
     }
 
-    private void processZip(Path zipPath, String province, BulkStats stats) throws Exception {
-        long startTime = System.currentTimeMillis();
+    private void processZip(Path zipPath, String province, BulkStats stats, ThreadPoolExecutor executor)
+            throws Exception {
         String csvName = "ODA_" + province + "_v1.csv";
 
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
@@ -134,23 +178,22 @@ class OdaBulkValidationTest {
                 reader.readLine(); // skip header
 
                 String line;
-                int lineNo = 1;
+                long lastProgressTime = System.currentTimeMillis();
                 while ((line = reader.readLine()) != null) {
-                    lineNo++;
-                    processRow(line, province, stats);
+                    final String csvLine = line;
+                    executor.execute(() -> {
+                        processRow(csvLine, province, stats);
+                        processedCount.increment();
+                    });
 
-                    if (lineNo % 100_000 == 0) {
-                        long elapsed = System.currentTimeMillis() - startTime;
-                        System.out.printf(
-                                "  %,d rows (%,d ms, %.0f rows/sec)%n", lineNo, elapsed, lineNo / (elapsed / 1000.0));
+                    long now = System.currentTimeMillis();
+                    if (now - lastProgressTime > 10_000) {
+                        printProgress(province, executor);
+                        lastProgressTime = now;
                     }
                 }
             }
         }
-
-        long elapsed = System.currentTimeMillis() - startTime;
-        int total = stats.totalByProvince.getOrDefault(province, 0);
-        System.out.printf("  Done: %,d rows in %,d ms (%.0f rows/sec)%n", total, elapsed, total / (elapsed / 1000.0));
     }
 
     private void processRow(String csvLine, String province, BulkStats stats) {
@@ -191,7 +234,7 @@ class OdaBulkValidationTest {
 
         stats.total(province);
 
-        var result = parser.parseAddress(fullAddress);
+        var result = PARSER.get().parseAddress(fullAddress);
 
         if (!result.successful()) {
             stats.parseFail(province, fullAddress, result.errors());
@@ -315,25 +358,23 @@ class OdaBulkValidationTest {
 
     static class BulkStats {
         final String currentProvince;
-        final Map<String, Integer> totalByProvince = new LinkedHashMap<>();
-        private final Map<String, Integer> skipped = new HashMap<>();
-        private final Map<String, Integer> parseSuccesses = new LinkedHashMap<>();
-        private final Map<String, Integer> parseFailures = new HashMap<>();
+        final ConcurrentMap<String, LongAdder> totalByProvince = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, LongAdder> skipped = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, LongAdder> parseSuccesses = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, LongAdder> parseFailures = new ConcurrentHashMap<>();
 
-        // Per-field accuracy: field -> province -> count
-        private final Map<String, Map<String, Integer>> fieldHas = new HashMap<>();
-        private final Map<String, Map<String, Integer>> fieldMatches = new HashMap<>();
-        private final Map<String, Map<String, Integer>> fieldMismatches = new HashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldHas = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMatches = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMismatches = new ConcurrentHashMap<>();
 
-        // Sample mismatches per field (for report)
-        private final Map<String, List<String>> sampleMismatches = new LinkedHashMap<>();
+        private final ConcurrentMap<String, List<String>> sampleMismatches = new ConcurrentHashMap<>();
         private static final int MAX_SAMPLES = 50;
 
-        // All mismatches for CSV export
-        final List<Mismatch> allMismatches = new ArrayList<>();
+        final Queue<Mismatch> allMismatches = new ConcurrentLinkedQueue<>();
 
-        private final List<String> sampleParseFailures = new ArrayList<>();
-        private final Map<String, Integer> missedTypeFrequency = new HashMap<>();
+        private final Queue<String> sampleParseFailures = new ConcurrentLinkedQueue<>();
+        private final ConcurrentMap<String, LongAdder> missedTypeFrequency = new ConcurrentHashMap<>();
+        private final AtomicInteger parseFailureSampleCount = new AtomicInteger();
 
         BulkStats(String province) {
             this.currentProvince = province;
@@ -353,28 +394,26 @@ class OdaBulkValidationTest {
 
         void parseFail(String p, String addr, List<String> errors) {
             inc(parseFailures, p);
-            if (sampleParseFailures.size() < MAX_SAMPLES) {
+            if (parseFailureSampleCount.getAndIncrement() < MAX_SAMPLES) {
                 sampleParseFailures.add(addr.replace("\n", " | ") + "  errors=" + errors);
             }
         }
 
         void hasField(String field, String p) {
-            fieldHas.computeIfAbsent(field, k -> new HashMap<>());
-            inc(fieldHas.get(field), p);
+            inc(fieldHas.computeIfAbsent(field, k -> new ConcurrentHashMap<>()), p);
         }
 
         void match(String field, String p) {
-            fieldMatches.computeIfAbsent(field, k -> new HashMap<>());
-            inc(fieldMatches.get(field), p);
+            inc(fieldMatches.computeIfAbsent(field, k -> new ConcurrentHashMap<>()), p);
         }
 
         void mismatch(String field, String p, String expected, String actual, String deliveryLine) {
-            fieldMismatches.computeIfAbsent(field, k -> new HashMap<>());
-            inc(fieldMismatches.get(field), p);
+            inc(fieldMismatches.computeIfAbsent(field, k -> new ConcurrentHashMap<>()), p);
 
             allMismatches.add(new Mismatch(field, p, expected, actual, deliveryLine));
 
-            List<String> samples = sampleMismatches.computeIfAbsent(field, k -> new ArrayList<>());
+            List<String> samples =
+                    sampleMismatches.computeIfAbsent(field, k -> Collections.synchronizedList(new ArrayList<>()));
             if (samples.size() < MAX_SAMPLES) {
                 samples.add("expected='" + expected + "' actual='" + actual + "'  line=" + deliveryLine);
             }
@@ -385,15 +424,15 @@ class OdaBulkValidationTest {
         }
 
         double parseSuccessRate() {
-            int t = sum(totalByProvince);
+            long t = sum(totalByProvince);
             return t == 0 ? 0 : (double) sum(parseSuccesses) / t;
         }
 
         void printSummary(PrintStream out) {
-            int total = sum(totalByProvince);
-            int skip = sum(skipped);
-            int success = sum(parseSuccesses);
-            int fail = sum(parseFailures);
+            long total = sum(totalByProvince);
+            long skip = sum(skipped);
+            long success = sum(parseSuccesses);
+            long fail = sum(parseFailures);
 
             out.println();
             out.println("=".repeat(80));
@@ -401,50 +440,53 @@ class OdaBulkValidationTest {
             out.println("=".repeat(80));
             out.printf("Rows skipped:            %,d%n", skip);
             skipped.entrySet().stream()
-                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                    .forEach(e -> out.printf("  %-30s %,d%n", e.getKey(), e.getValue()));
+                    .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                                    Comparator.comparingLong(LongAdder::sum))
+                            .reversed())
+                    .forEach(e -> out.printf("  %-30s %,d%n", e.getKey(), e.getValue().sum()));
             out.printf("Rows tested:             %,d%n", total);
             out.println("-".repeat(80));
             out.printf("Parse success:           %,d / %,d  (%.4f%%)%n", success, total, pct(success, total));
             out.printf("Parse failures:          %,d%n", fail);
 
-            // Per-field accuracy
             out.println("-".repeat(80));
             out.println("FIELD ACCURACY (case-insensitive match against ODA ground truth)");
             out.println("-".repeat(80));
             String[] fields = {"streetNo", "streetName", "streetType", "streetDir", "city", "province", "postalCode"};
             for (String field : fields) {
-                int has = sumField(fieldHas, field);
-                int ok = sumField(fieldMatches, field);
-                int miss = sumField(fieldMismatches, field);
+                long has = sumField(fieldHas, field);
+                long ok = sumField(fieldMatches, field);
+                long miss = sumField(fieldMismatches, field);
                 if (has > 0 || "streetNo".equals(field)) {
-                    int denom = "streetNo".equals(field) ? success : has;
+                    long denom = "streetNo".equals(field) ? success : has;
                     out.printf(
                             "  %-15s  %,9d / %,9d  (%7.3f%%)  mismatches: %,d%n",
                             field, ok, denom, pct(ok, denom), miss);
                 }
             }
 
-            // Per-province summary
             out.println("-".repeat(80));
             out.println("PER-PROVINCE PARSE RATE");
             out.println("-".repeat(80));
-            for (var entry : totalByProvince.entrySet()) {
-                String p = entry.getKey();
-                int pt = entry.getValue();
-                int ps = parseSuccesses.getOrDefault(p, 0);
-                out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
-            }
+            totalByProvince.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(entry -> {
+                        String p = entry.getKey();
+                        long pt = entry.getValue().sum();
+                        long ps = parseSuccesses.containsKey(p) ? parseSuccesses.get(p).sum() : 0;
+                        out.printf("  %-3s  total=%,9d  success=%,9d (%7.3f%%)%n", p, pt, ps, pct(ps, pt));
+                    });
 
-            // Top 20 unrecognized types
             if (!missedTypeFrequency.isEmpty()) {
                 out.println("-".repeat(80));
                 out.println("UNRECOGNIZED STREET TYPES (top 20)");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                                        Comparator.comparingLong(LongAdder::sum))
+                                .reversed())
                         .limit(20)
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue()));
+                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
 
             out.println("=".repeat(80));
@@ -465,31 +507,33 @@ class OdaBulkValidationTest {
                 entry.getValue().forEach(m -> out.println("  " + m));
             }
 
-            // All unrecognized types
             if (!missedTypeFrequency.isEmpty()) {
                 out.println();
                 out.println("ALL UNRECOGNIZED STREET TYPES");
                 out.println("-".repeat(80));
                 missedTypeFrequency.entrySet().stream()
-                        .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue()));
+                        .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                                        Comparator.comparingLong(LongAdder::sum))
+                                .reversed())
+                        .forEach(e -> out.printf("  %-25s %,d%n", e.getKey(), e.getValue().sum()));
             }
         }
 
-        private static int sumField(Map<String, Map<String, Integer>> fieldMap, String field) {
-            Map<String, Integer> m = fieldMap.get(field);
+        private static long sumField(
+                ConcurrentMap<String, ConcurrentMap<String, LongAdder>> fieldMap, String field) {
+            ConcurrentMap<String, LongAdder> m = fieldMap.get(field);
             return m == null ? 0 : sum(m);
         }
 
-        private static void inc(Map<String, Integer> m, String k) {
-            m.merge(k, 1, Integer::sum);
+        private static void inc(ConcurrentMap<String, LongAdder> m, String k) {
+            m.computeIfAbsent(k, x -> new LongAdder()).increment();
         }
 
-        private static int sum(Map<String, Integer> m) {
-            return m.values().stream().mapToInt(i -> i).sum();
+        private static long sum(ConcurrentMap<String, LongAdder> m) {
+            return m.values().stream().mapToLong(LongAdder::sum).sum();
         }
 
-        private static double pct(int n, int d) {
+        private static double pct(long n, long d) {
             return d == 0 ? 0 : (double) n / d * 100;
         }
     }
