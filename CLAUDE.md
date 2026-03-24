@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **NorthPost Parser** — Canadian postal address parser library built with **ANTLR4** grammars. Parses free-form Canadian address text (English and French) into structured components (addressee, street, municipality, province, postal code, etc.). Pure Java library with no framework dependencies.
 
+## Git Workflow
+
+GitHub is configured to **squash-and-merge** PRs. After a PR merges, use `git branch -D branch` (force delete) to clean up local branches — `git branch -d` will fail because the squashed commit has a different SHA than the branch's original commits.
+
 ## Build & Test Commands
 
 ```bash
