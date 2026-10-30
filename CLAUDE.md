@@ -101,3 +101,9 @@ Bulk test (`NarBulkValidationTest`) validates the parser against the Statistics 
 
 - ANTLR 4.13.1 (grammar + runtime)
 - SLF4J 2.0.9 for logging (consumers provide their own implementation)
+
+## Releases
+
+- **Manual release**: publish a GitHub release with a `vX.Y.Z` tag. `release.yml` publishes to Maven Central (version derived from the tag by axion-release) and opens an auto-merging PR that updates the README version snippets.
+- **Automatic security release**: Dependabot security updates to runtime dependencies (ANTLR runtime, SLF4J API) arrive via the `runtime-security` group in `.github/dependabot.yml`. When one merges, the `auto-release` job in `ci.yml` tags the next patch version, creates a GitHub release, and dispatches `release.yml`. Ordinary version bumps, test dependencies, and build tooling are auto-merged but never released automatically.
+- Dependabot PRs auto-merge (non-major only) once the required `Java 21` / `Java 25` checks pass; the requirement lives in the `main protection` ruleset.

@@ -5,9 +5,38 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Wait a week after a release before proposing it, to skip versions that get yanked.
+    # Cooldown applies to version updates only; security updates are raised immediately.
+    cooldown:
+      default-days: 7
     groups:
+      # Security updates to runtime dependencies (those shipped in the published artifact).
+      # The CI auto-release job recognises this group by its branch name and cuts a
+      # patch release to Maven Central when one of these PRs is merged.
+      runtime-security:
+        applies-to: security-updates
+        patterns:
+          - "org.antlr*"
+          - "org.slf4j*"
       testing:
         patterns:
           - "org.junit*"
           - "org.assertj*"
           - "ch.qos.logback*"
+      build-plugins:
+        patterns:
+          - "com.diffplug.spotless"
+          - "org.jetbrains.qodana"
+          - "com.vanniktech.maven.publish"
+          - "pl.allegro.tech.build.axion-release"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
