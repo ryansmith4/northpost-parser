@@ -5,9 +5,16 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Lets release.yml run CI on the automated README-update branch: events raised
+  # with GITHUB_TOKEN (such as that branch's push) do not start workflows on their own.
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -17,15 +24,16 @@ jobs:
       matrix:
         java: [ 21, 25 ]
 
+    # These job names are required status checks in the main branch ruleset.
     name: Java ${{ matrix.java }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ matrix.java }}
           distribution: temurin
@@ -39,15 +47,101 @@ jobs:
   dependency-submission:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: 21
           distribution: temurin
 
       - name: Generate and submit dependency graph
         uses: gradle/actions/dependency-submission@v5
+
+  # Security-only auto-release. When Dependabot merges a *security* update to a runtime
+  # dependency (one that ships in the published artifact), cut a patch release so the
+  # Maven Central artifact no longer carries the vulnerable dependency.
+  #
+  # Security PRs for runtime dependencies are identified by the "runtime-security"
+  # Dependabot group (see .github/dependabot.yml), whose branches are named
+  # dependabot/gradle/runtime-security-<hash>. Ordinary version bumps, test dependencies
+  # and build tooling are merged by auto-merge but never released automatically.
+  auto-release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.head_commit.author.name == 'dependabot[bot]'
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect runtime security update
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr_head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.ref // ""')
+          echo "Merged PR branch: ${pr_head:-<none>}"
+
+          security=false
+          case "$pr_head" in
+            dependabot/gradle/runtime-security-*) security=true ;;
+          esac
+
+          runtime=false
+          # Runtime dependencies are the [versions] keys backing `api` dependencies in build.gradle.
+          if git diff HEAD~1 HEAD -- gradle/libs.versions.toml | grep -Eq '^[+-](antlr|slf4j) = '; then
+            runtime=true
+          fi
+
+          echo "security-update=$security runtime-dependency-changed=$runtime"
+          if [ "$security" = true ] && [ "$runtime" = true ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not a runtime security update; skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next patch version
+        if: steps.detect.outputs.release == 'true'
+        id: version
+        run: |
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          IFS=. read -r major minor patch <<< "${latest#v}"
+          next="v${major}.${minor}.$((patch + 1))"
+          echo "Latest tag: $latest -> next: $next"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and create GitHub release
+        if: steps.detect.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Automated security patch release: ${COMMIT_MSG%%$'\n'*}" \
+            --generate-notes
+
+      - name: Publish to Maven Central
+        if: steps.detect.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        # A release created with GITHUB_TOKEN does not fire the `release` event,
+        # so start the release workflow explicitly at the new tag.
+        run: gh workflow run release.yml --ref "$TAG"
