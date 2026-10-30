@@ -93,3 +93,43 @@ jobs:
         run: |
           gh workflow run ci.yml --ref readme-version-update
           gh pr merge --auto --squash "$PR_NUMBER"
+
+  # GitHub only emails Actions failures to the person who triggered the run, and
+  # automated releases are triggered by a bot. Open an issue so a failed publish
+  # is not missed.
+  report-failure:
+    runs-on: ubuntu-latest
+    needs: [ publish, update-readme ]
+    if: always() && contains(needs.*.result, 'failure')
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          README_RESULT: ${{ needs['update-readme'].result }}
+        run: |
+          gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
+            --color B60205 --description "An automated release workflow failed"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Release $GITHUB_REF_NAME failed" \
+            --label release-failure \
+            --body "$(cat <<BODY
+          The release workflow for \`$GITHUB_REF_NAME\` did not complete.
+
+          | Job | Result |
+          |---|---|
+          | publish | $PUBLISH_RESULT |
+          | update-readme | $README_RESULT |
+
+          Run: $RUN_URL
+
+          If \`publish\` failed, check whether the version reached Maven Central before re-running:
+          https://repo1.maven.org/maven2/com/guidedbyte/northpost-parser/
+
+          To retry: \`gh workflow run release.yml --ref $GITHUB_REF_NAME\`
+          BODY
+          )"

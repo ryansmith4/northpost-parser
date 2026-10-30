@@ -80,6 +80,7 @@ jobs:
     permissions:
       contents: write
       actions: write
+      issues: write
 
     steps:
       - uses: actions/checkout@v7
@@ -145,3 +146,28 @@ jobs:
         # A release created with GITHUB_TOKEN does not fire the `release` event,
         # so start the release workflow explicitly at the new tag.
         run: gh workflow run release.yml --ref "$TAG"
+
+      # Automated runs are not emailed to anyone on failure; leave an issue instead.
+      - name: Open issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
+            --color B60205 --description "An automated release workflow failed"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Automated security release failed after: ${COMMIT_MSG%%$'\n'*}" \
+            --label release-failure \
+            --body "$(cat <<BODY
+          The CI \`auto-release\` job failed on commit \`$GITHUB_SHA\`.
+
+          Intended tag: \`${TAG:-not computed}\`
+          Run: $RUN_URL
+
+          Check whether the tag and GitHub release were created before retrying. If the tag
+          exists but nothing was published, run: \`gh workflow run release.yml --ref $TAG\`
+          BODY
+          )"
