@@ -22,7 +22,7 @@ GitHub is configured to **squash-and-merge** PRs. After a PR merges, use `git br
 ./gradlew cleanTest test -PodaBulk -PodaBulkOnly -PodaProvinces=BC # ODA bulk validation (specific province)
 ```
 
-Java 21 required. Gradle 9.4.0 (wrapper included).
+Java 21 required (toolchain set in `build.gradle`). Always use the wrapper (`./gradlew`); its Gradle version is defined in `gradle/wrapper/gradle-wrapper.properties` and kept current by Dependabot.
 
 ## Architecture
 
@@ -99,8 +99,11 @@ Bulk test (`NarBulkValidationTest`) validates the parser against the Statistics 
 
 ## Key Dependencies
 
-- ANTLR 4.13.1 (grammar + runtime)
-- SLF4J 2.0.9 for logging (consumers provide their own implementation)
+Versions live in `gradle/libs.versions.toml` (the Gradle version catalog) and are kept current by Dependabot, so they are not repeated here.
+
+- **ANTLR** — grammar tool at build time and `antlr4-runtime` as an `api` dependency; both share one version entry
+- **SLF4J API** — logging facade exposed as an `api` dependency; consumers provide their own implementation
+- Everything else (JUnit, AssertJ, Logback, Spotless, Qodana, publishing plugins) is test or build tooling and does not ship in the artifact
 
 ## Releases
 
