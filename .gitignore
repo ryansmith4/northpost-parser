@@ -49,3 +49,11 @@ build/qodana/
 oda-data/
 nar-data/
 src/test/resources/ODA_*/
+
+### Python ###
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+/python/dist/

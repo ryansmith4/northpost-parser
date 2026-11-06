@@ -45,6 +45,42 @@ jobs:
       - name: Build and test
         run: ./gradlew build
 
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    name: Python ${{ matrix.python }}
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Set up Java for ANTLR generation
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: 21
+          distribution: temurin
+
+      - name: Install Poetry and project
+        run: |
+          python -m pip install poetry==2.3.4
+          poetry install --no-interaction
+
+      - name: Check generated sources, test, and build
+        run: |
+          poetry check --lock
+          poetry run python scripts/generate_parser.py --check
+          poetry run pytest
+          poetry build
+
   dependency-submission:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
