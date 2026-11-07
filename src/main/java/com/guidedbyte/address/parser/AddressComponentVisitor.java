@@ -1235,9 +1235,10 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (idx >= tokens.size()) return;
 
         // Try to coalesce adjacent compound tokens into a single unit value (1/2, 405-2, 1101.1)
+        // A comma may separate the unit value from the civic number in the French form (APP 4, 123, RUE ...).
         CompoundResult compound = tryCoalesceAdjacentCompound(tokens, idx);
         if (compound != null) {
-            int afterCompound = idx + compound.tokensConsumed;
+            int afterCompound = skipCommas(tokens, idx + compound.tokensConsumed);
             boolean hasFollowingCivic = afterCompound < tokens.size()
                     && (tokens.get(afterCompound).type == CanadianAddressParser.NUMBER
                             || tokens.get(afterCompound).type == CanadianAddressParser.ALPHANUMERIC);
@@ -1251,19 +1252,20 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // Existing single-token heuristic (only if compound didn't consume)
         if (idx == 1) {
             TokenInfo candidate = tokens.get(idx);
-            boolean hasFollowingCivic = idx + 1 < tokens.size()
-                    && (tokens.get(idx + 1).type == CanadianAddressParser.NUMBER
-                            || tokens.get(idx + 1).type == CanadianAddressParser.ALPHANUMERIC);
+            int afterCandidate = skipCommas(tokens, idx + 1);
+            boolean hasFollowingCivic = afterCandidate < tokens.size()
+                    && (tokens.get(afterCandidate).type == CanadianAddressParser.NUMBER
+                            || tokens.get(afterCandidate).type == CanadianAddressParser.ALPHANUMERIC);
 
             if (candidate.type == CanadianAddressParser.ALPHANUMERIC) {
                 // Digit-starting mixed token (5A, 2B) — always a unit identifier when designator is present
                 builder.unitNumber(candidate.text);
-                idx++;
+                idx = afterCandidate;
             } else if ((candidate.type == CanadianAddressParser.WORD || candidate.type == CanadianAddressParser.NUMBER)
                     && hasFollowingCivic) {
-                // WORD or NUMBER followed by civic number → unit value (APT A 394, APT 5 394)
+                // WORD or NUMBER followed by civic number → unit value (APT A 394, APT 5 394, APP 4, 123)
                 builder.unitNumber(candidate.text);
-                idx++;
+                idx = afterCandidate;
             }
             // else: single NUMBER with no following civic → it IS the civic (APT 394 QUEEN ST)
             // else: WORD with no following civic → fall through to street parsing (APT QUEEN ST)
@@ -1722,6 +1724,39 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
+     * True when a comma-delimited segment is just a civic or unit number, as in the French forms {@code 123, RUE
+     * PRINCIPALE} and {@code APP 4, 123, RUE PRINCIPALE}: at least one NUMBER or ALPHANUMERIC token and no WORD other
+     * than a leading unit designator. Hyphens and slashes are tolerated so {@code 4-123,} and {@code 123 1/2,} qualify.
+     */
+    private static boolean isCivicNumberSegment(List<TokenInfo> segment) {
+        boolean hasNumber = false;
+        for (int i = 0; i < segment.size(); i++) {
+            TokenInfo t = segment.get(i);
+            switch (t.type) {
+                case CanadianAddressParser.NUMBER, CanadianAddressParser.ALPHANUMERIC -> hasNumber = true;
+                case CanadianAddressParser.WORD -> {
+                    if (i != 0 || !isUnitDesignator(t.text.toUpperCase())) return false;
+                }
+                case CanadianAddressParser.HYPHEN, CanadianAddressParser.SLASH, CanadianAddressParser.COMMA -> {
+                    // separators inside a compound civic (4-123, 123 1/2) or a stray comma
+                }
+                default -> {
+                    return false;
+                }
+            }
+        }
+        return hasNumber;
+    }
+
+    /** Index of the first token at or after {@code idx} that is not a COMMA (or {@code tokens.size()}). */
+    private static int skipCommas(List<TokenInfo> tokens, int idx) {
+        while (idx < tokens.size() && tokens.get(idx).type == CanadianAddressParser.COMMA) {
+            idx++;
+        }
+        return idx;
+    }
+
+    /**
      * Plan 7: Attempt to split a single-line comma-delimited address into synthetic delivery + region lines. Scans
      * comma positions right-to-left, looking for a province code/name or postal code after the comma. The rightmost
      * comma that satisfies this heuristic is the split point.
@@ -1754,6 +1789,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 afterIdx++;
             }
             if (afterIdx >= tokens.size()) continue;
+
+            // French civic-number comma ("123, RUE PRINCIPALE" or "APP 4, 123, RUE PRINCIPALE"):
+            // when the segment since the previous comma is only a civic or unit number, this comma
+            // follows the number and is not the delivery/region boundary.
+            int segmentStart = ci == 0 ? 0 : commaPositions.get(ci - 1) + 1;
+            if (isCivicNumberSegment(tokens.subList(segmentStart, commaIdx))) continue;
 
             // Check if tokens from afterIdx to end contain a province code/name or postal code
             boolean hasRegionMarker = false;
