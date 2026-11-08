@@ -17,6 +17,22 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Sorts the bump for the generated release notes (.github/release.yml):
+      # runtime-dependency for libraries shipped in the artifact, tooling for the rest.
+      # The patterns match the runtime-security group in .github/dependabot.yml.
+      - name: Label as runtime or tooling dependency
+        env:
+          DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          case "$DEPENDENCIES" in
+            *org.antlr*|*org.slf4j*) label=runtime-dependency ;;
+            *) label=tooling ;;
+          esac
+          echo "Dependencies: $DEPENDENCIES -> $label"
+          gh pr edit "$PR_URL" --add-label "$label"
+
       # Auto-merge waits for the required status checks ("Java 21" / "Java 25")
       # configured in the main branch ruleset before merging.
       - if: steps.metadata.outputs.update-type != 'version-update:semver-major'
