@@ -9,6 +9,9 @@ changelog:
     labels:
       # The automated README version bump that follows each release.
       - skip-changelog
+      # Test and build tooling bumps change nothing in the artifact. The Dependabot
+      # auto-merge workflow applies this label; the Full Changelog link still lists them.
+      - tooling
   categories:
     - title: Features
       labels:
@@ -23,8 +26,15 @@ changelog:
       labels:
         - documentation
     - title: Dependencies
+      # Libraries shipped in the artifact (ANTLR runtime, SLF4J API). The plain
+      # "dependencies" label is a fallback for a bump the auto-merge workflow did not sort.
       labels:
+        - runtime-dependency
         - dependencies
+    - title: Maintenance
+      labels:
+        - ci
+        - refactor
     - title: Other Changes
       labels:
         - "*"
