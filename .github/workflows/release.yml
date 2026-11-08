@@ -94,6 +94,9 @@ jobs:
             Updates dependency snippets in README.md to version `${{ steps.version.outputs.version }}`.
           branch: readme-version-update
           delete-branch: true
+          # Keeps this housekeeping PR out of the next release's generated notes
+          # (see .github/release.yml).
+          labels: skip-changelog
 
       # The PR above is created with GITHUB_TOKEN, so its push does not trigger the CI
       # workflow. Dispatch CI against the branch so the required status checks run,

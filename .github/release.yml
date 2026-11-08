@@ -1,0 +1,30 @@
+# Groups the release notes that GitHub generates (the "Generate release notes" button, or
+# `gh release create --generate-notes` in the CI auto-release job) by pull-request label.
+# A pull request lands in the first category whose label it carries. Unlabelled pull
+# requests fall into "Other Changes", so label a PR before merging if it belongs elsewhere.
+#
+# Not the release workflow: that is .github/workflows/release.yml.
+changelog:
+  exclude:
+    labels:
+      # The automated README version bump that follows each release.
+      - skip-changelog
+  categories:
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      # Parse-output changes are what the README's Versioning section promises to list,
+      # so accuracy work is listed here unless it is also labelled as a feature.
+      labels:
+        - bug
+        - accuracy
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other Changes
+      labels:
+        - "*"
