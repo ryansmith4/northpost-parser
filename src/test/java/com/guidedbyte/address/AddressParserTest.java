@@ -653,6 +653,90 @@ class AddressParserTest {
     }
 
     @Nested
+    @DisplayName("Region Line Province Detection")
+    class RegionLineProvinceTests {
+
+        @Test
+        @DisplayName("Should keep a municipality containing a province code intact (NIAGARA ON THE LAKE)")
+        void shouldKeepMunicipalityContainingProvinceCode() {
+            var result = parser.parseAddress("JOHN SMITH\n1875 LAKESHORE RD\nNIAGARA ON THE LAKE ON L0S 1J0");
+
+            assertThat(result.successful()).isTrue();
+            assertThat(result.components().municipality()).isEqualTo("NIAGARA ON THE LAKE");
+            assertThat(result.components().province()).isEqualTo("ON");
+            assertThat(result.components().postalCode()).isEqualTo("L0S 1J0");
+        }
+
+        @Test
+        @DisplayName("Should keep the municipality intact when the postal code has no space")
+        void shouldKeepMunicipalityIntactWithUnspacedPostalCode() {
+            var result = parser.parseAddress("JOHN SMITH\n6 SEYVAL PL\nNIAGARA ON THE LAKE ON  L0S1J0");
+
+            assertThat(result.components().municipality()).isEqualTo("NIAGARA ON THE LAKE");
+            assertThat(result.components().province()).isEqualTo("ON");
+            assertThat(result.components().postalCode()).isEqualTo("L0S 1J0");
+        }
+
+        @Test
+        @DisplayName("Should keep the municipality intact when the postal code is on its own line")
+        void shouldKeepMunicipalityIntactWithPostalCodeOnOwnLine() {
+            var result = parser.parseAddress("JOHN SMITH\n17 BROCK ST\nNIAGARA ON THE LAKE ON\nL0S 1J0");
+
+            assertThat(result.components().municipality()).isEqualTo("NIAGARA ON THE LAKE");
+            assertThat(result.components().province()).isEqualTo("ON");
+            assertThat(result.components().postalCode()).isEqualTo("L0S 1J0");
+        }
+
+        @Test
+        @DisplayName("Should prefer the province nearest the postal code when the municipality contains another code")
+        void shouldPreferProvinceNearestPostalCodeForNonOntarioCode() {
+            // "NB" inside the municipality must not be taken as New Brunswick
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nPORT NB HARBOUR NS B0J 1J0");
+
+            assertThat(result.components().municipality()).isEqualTo("PORT NB HARBOUR");
+            assertThat(result.components().province()).isEqualTo("NS");
+            assertThat(result.components().postalCode()).isEqualTo("B0J 1J0");
+        }
+
+        @Test
+        @DisplayName("Should keep the municipality intact when the province is written as a full name")
+        void shouldKeepMunicipalityIntactWithFullProvinceName() {
+            var result = parser.parseAddress("JOHN SMITH\n1875 LAKESHORE RD\nNIAGARA ON THE LAKE ONTARIO L0S 1J0");
+
+            assertThat(result.components().municipality()).isEqualTo("NIAGARA ON THE LAKE");
+            assertThat(result.components().province()).isEqualTo("ON");
+            assertThat(result.components().postalCode()).isEqualTo("L0S 1J0");
+        }
+
+        @Test
+        @DisplayName("Should keep the municipality intact in a comma-separated single-line address")
+        void shouldKeepMunicipalityIntactInCommaSeparatedAddress() {
+            var result = parser.parseAddress("1875 LAKESHORE RD, NIAGARA ON THE LAKE, ON L0S 1J0");
+
+            assertThat(result.components().streetNumber()).isEqualTo("1875");
+            assertThat(result.components().streetName()).isEqualTo("LAKESHORE");
+            assertThat(result.components().municipality()).isEqualTo("NIAGARA ON THE LAKE");
+            assertThat(result.components().province()).isEqualTo("ON");
+            assertThat(result.components().postalCode()).isEqualTo("L0S 1J0");
+        }
+
+        @ParameterizedTest
+        @ValueSource(
+                strings = {
+                    "JOHN SMITH\n123 MAIN ST\nTORONTO ON M5V 2Y7",
+                    "JOHN SMITH\n123 MAIN ST\nTORONTO ON M5V 2Y7 CANADA",
+                    "JOHN SMITH\n123 MAIN ST\nTORONTO ON"
+                })
+        @DisplayName("Should still find a province that appears only once")
+        void shouldStillFindSingleProvince(String address) {
+            var result = parser.parseAddress(address);
+
+            assertThat(result.components().municipality()).isEqualTo("TORONTO");
+            assertThat(result.components().province()).isEqualTo("ON");
+        }
+    }
+
+    @Nested
     @DisplayName("Parsing Modes")
     class ParsingModeTests {
 

@@ -958,65 +958,62 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
         }
 
-        // Find province code (2-letter)
+        // Find the province. Scan right-to-left so the province marker nearest the postal code wins:
+        // a municipality can itself contain a province code or name ("NIAGARA ON THE LAKE ON L0S 1J0",
+        // "NIAGARA ON THE LAKE ONTARIO L0S 1J0"), and the real province is always the last one before
+        // the postal code. At each position a 2-letter code is tried first, then full names and informal
+        // abbreviations (Plan 1), longest match first so "NEWFOUNDLAND AND LABRADOR" beats "NEWFOUNDLAND".
+        // Postal code tokens are skipped rather than used as a bound so a province written after the
+        // postal code is still found.
         String province = null;
         int provinceStartIdx = -1;
         int provinceEndIdx = -1;
-        for (int i = 0; i < tokens.size(); i++) {
-            if (i >= postalCodeStartIdx && i <= postalCodeEndIdx) continue;
-            if (tokens.get(i).type == CanadianAddressParser.WORD
-                    && PROVINCE_CODES.contains(tokens.get(i).text.toUpperCase())) {
-                province = tokens.get(i).text.toUpperCase();
+        for (int i = tokens.size() - 1; i >= 0 && province == null; i--) {
+            if (postalCodeStartIdx >= 0 && i >= postalCodeStartIdx && i <= postalCodeEndIdx) continue;
+            if (tokens.get(i).type != CanadianAddressParser.WORD) continue;
+
+            String codeCandidate = tokens.get(i).text.toUpperCase();
+            if (PROVINCE_CODES.contains(codeCandidate)) {
+                province = codeCandidate;
                 provinceStartIdx = i;
                 provinceEndIdx = i;
                 break;
             }
-        }
 
-        // Plan 1: If no 2-letter code found, scan right-to-left for province names
-        if (province == null) {
-            int scanEnd = tokens.size();
-            if (postalCodeStartIdx >= 0) scanEnd = postalCodeStartIdx;
+            for (Map.Entry<String, String> entry : PROVINCE_NAMES.entrySet()) {
+                String name = entry.getKey();
+                String[] nameParts = name.split("\\s+");
 
-            // Right-to-left: try longest match first at each position
-            for (int i = scanEnd - 1; i >= 0 && province == null; i--) {
-                if (tokens.get(i).type != CanadianAddressParser.WORD) continue;
+                // Check if enough tokens exist starting at position (i - nameParts.length + 1)
+                int startPos = i - nameParts.length + 1;
+                if (startPos < 0) continue;
 
-                for (Map.Entry<String, String> entry : PROVINCE_NAMES.entrySet()) {
-                    String name = entry.getKey();
-                    String[] nameParts = name.split("\\s+");
-
-                    // Check if enough tokens exist starting at position (i - nameParts.length + 1)
-                    int startPos = i - nameParts.length + 1;
-                    if (startPos < 0) continue;
-
-                    boolean match = true;
-                    for (int j = 0; j < nameParts.length; j++) {
-                        int tokenIdx = startPos + j;
-                        if (tokenIdx >= postalCodeStartIdx && tokenIdx <= postalCodeEndIdx && postalCodeStartIdx >= 0) {
-                            match = false;
-                            break;
-                        }
-                        String tokenText = tokens.get(tokenIdx).text.toUpperCase();
-                        // Strip trailing period for comparison
-                        String compareText =
-                                tokenText.endsWith(".") ? tokenText.substring(0, tokenText.length() - 1) : tokenText;
-                        String namePartCompare = nameParts[j].endsWith(".")
-                                ? nameParts[j].substring(0, nameParts[j].length() - 1)
-                                : nameParts[j];
-                        if (!compareText.equals(namePartCompare) && !tokenText.equals(nameParts[j])) {
-                            match = false;
-                            break;
-                        }
-                    }
-
-                    if (match) {
-                        province = entry.getValue();
-                        provinceStartIdx = startPos;
-                        provinceEndIdx = i;
-                        logger.debug("Matched province name '{}' → '{}'", name, province);
+                boolean match = true;
+                for (int j = 0; j < nameParts.length; j++) {
+                    int tokenIdx = startPos + j;
+                    if (tokenIdx >= postalCodeStartIdx && tokenIdx <= postalCodeEndIdx && postalCodeStartIdx >= 0) {
+                        match = false;
                         break;
                     }
+                    String tokenText = tokens.get(tokenIdx).text.toUpperCase();
+                    // Strip trailing period for comparison
+                    String compareText =
+                            tokenText.endsWith(".") ? tokenText.substring(0, tokenText.length() - 1) : tokenText;
+                    String namePartCompare = nameParts[j].endsWith(".")
+                            ? nameParts[j].substring(0, nameParts[j].length() - 1)
+                            : nameParts[j];
+                    if (!compareText.equals(namePartCompare) && !tokenText.equals(nameParts[j])) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match) {
+                    province = entry.getValue();
+                    provinceStartIdx = startPos;
+                    provinceEndIdx = i;
+                    logger.debug("Matched province name '{}' → '{}'", name, province);
+                    break;
                 }
             }
         }
