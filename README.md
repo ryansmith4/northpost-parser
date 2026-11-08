@@ -191,7 +191,24 @@ This approach correctly handles addresses with or without an addressee line, reg
 | Suite | Scope | Description |
 |-------|-------|-------------|
 | `AddressParserTest` | Unit | 300+ tests across 20+ categories — civic, French, PO box, rural, lettered avenues, direction pairs, type disambiguation, hyphen/slash/ampersand preservation, edge cases, validation, batch, performance |
-| `OdaAddressTest` | Parameterized | 147 curated addresses from Statistics Canada ODA datasets |
+| `OdaAddressTest` | Parameterized | 150 curated addresses from Statistics Canada ODA datasets |
+| `NarSampleRegressionTest` | Parameterized | About 2,400 NAR addresses from all 13 provinces and territories plus known-hard patterns, replayed against the parser's recorded output (one test per province) |
+
+### NAR Regression Sample
+
+`src/test/resources/nar_sample_addresses.csv` holds about 2,400 addresses drawn from the National Address Register across all 13 provinces and territories, each with the exact component values the parser produced for it. `NarSampleRegressionTest` replays the file on every `./gradlew test`, so a change in parser behaviour, including one introduced by an ANTLR runtime bump, fails the build without the multi-gigabyte bulk datasets. The file is also the conformance target for ports of the parser to other languages: feed each `address` column (with `\n` expanded to a line break) to the port and compare the eight remaining columns exactly.
+
+Rows are stratified by province, with small provinces over-weighted so Ontario and Quebec do not dominate, and within a province by shape (unit, street type, direction and civic suffix present or absent). Known-hard patterns get their own sections: New Brunswick `ROUTE nnn`, Quebec `GRANDE ALLÉE`-style odonyms, lettered and numbered streets, fractional civic numbers and compound unit labels.
+
+The expected values are the parser's own output, not NAR ground truth, so the file is a behaviour snapshot rather than a correctness oracle:
+
+```bash
+# After an intentional parser change: re-record the expected values, then review the diff
+./gradlew refreshNarSample
+
+# Redraw the sample itself (deterministic, seeded; needs nar-data/NAR_*.zip, see NAR Bulk Validation)
+./gradlew drawNarSample
+```
 
 ### ODA Bulk Validation
 
@@ -224,6 +241,11 @@ The parser can also be validated against the [Statistics Canada NAR](https://www
 ```
 
 Reports are written to `build/reports/nar-bulk/`. Both ODA and NAR bulk tests run in parallel and complete in under 5 minutes on modern hardware with 1.5GB heap.
+
+### Data Attribution
+
+- `nar_sample_addresses.csv`: Adapted from Statistics Canada, National Address Register (NAR_202512). This does not constitute an endorsement by Statistics Canada of this product. Used under the [Statistics Canada Open Licence](https://www.statcan.gc.ca/en/reference/licence).
+- `oda_test_addresses.csv`: Contains information licensed under the [Open Government Licence – Canada](https://open.canada.ca/en/open-government-licence-canada), from Statistics Canada's Open Database of Addresses.
 
 ### Accuracy
 
