@@ -17,6 +17,13 @@ Thank you for your interest in contributing! Here's how to get started.
 3. Ensure all tests pass: `./gradlew build`
 4. Submit a pull request
 
+## Compatibility
+
+The library follows semantic versioning; the [Versioning](README.md#versioning) section of the
+README says what counts as public API. If your change removes or renames anything public, or
+changes what a parsed field means, say so in the pull request so the next release can be a
+major version.
+
 ## Code Style
 
 - 4-space indentation (no tabs)

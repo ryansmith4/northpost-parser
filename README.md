@@ -275,6 +275,22 @@ Not all ODA provinces provide all structured fields — "Addresses Tested" refle
 | JUnit | 5 |
 | AssertJ | 3.24.2 |
 
+## Versioning
+
+NorthPost Parser follows [Semantic Versioning](https://semver.org/). Release tags are `vMAJOR.MINOR.PATCH`.
+
+**What the version number covers.** The public API is the `com.guidedbyte.address.model` and `com.guidedbyte.address.service` packages: `AddressParserService` and its nested types, `AddressComponents` with its builder and enums, and `NormalizationStrategy`. The `com.guidedbyte.address.parser` package and the generated ANTLR classes are implementation details and may change in any release.
+
+- **MAJOR**: a change that breaks code compiled against or written for the public API. Removing or renaming a public type, method, constructor, builder field or enum constant counts, and so does changing what a field means (for example, moving the unit number to a different field).
+- **MINOR**: new public API, new enum constants, support for new street types or address formats, and parsing improvements that change the output for some inputs. Upgrading needs no code changes, with the enum caveat below.
+- **PATCH**: bug fixes, dependency updates for security advisories, and documentation. A patch release is cut automatically when a dependency shipped in the artifact has a security advisory.
+
+**Parse output can change in a minor release.** The parser is validated against millions of real addresses, and improving accuracy means some inputs parse differently after an upgrade. Such changes are listed in the release notes. If your code depends on exact output for specific inputs, pin the minor version and test before upgrading.
+
+**New enum constants are minor, but check exhaustive switches.** Adding a constant to `AddressType`, `ParsingMode`, `ParsingStrategy` or `NormalizationStrategy` does not break compiled code, but a `switch` expression over the enum with no `default` branch stops compiling. Add a `default` branch if you want to take minor upgrades without source changes.
+
+Releases are made when the parser or a shipped dependency changes, not on a schedule. Updates to build and test tooling do not produce a release.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE). See the [LICENSE](LICENSE) file for details.
