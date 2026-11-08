@@ -70,7 +70,18 @@ jobs:
             -e "s#(northpost-parser:)[0-9]+\.[0-9]+\.[0-9]+#\1${VERSION}#g" \
             -e "s#<version>[0-9]+\.[0-9]+\.[0-9]+</version>#<version>${VERSION}</version>#g" \
             README.md
+          # Without this check, snippets that stop matching the patterns above would leave
+          # the README stale behind a green job and no PR.
+          if ! grep -Fq "northpost-parser:${VERSION}" README.md \
+             || ! grep -Fq "<version>${VERSION}</version>" README.md; then
+            echo "::error::README.md does not reference ${VERSION} after substitution; the install snippets may have changed shape."
+            exit 1
+          fi
 
+      # Creating a PR with GITHUB_TOKEN needs the repository setting
+      # Settings > Actions > General > "Allow GitHub Actions to create and approve pull
+      # requests". With it off, this step fails with "GitHub Actions is not permitted to
+      # create or approve pull requests" (the v1.1.0 release, issue #60).
       - name: Create pull request
         id: cpr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
@@ -132,6 +143,12 @@ jobs:
 
           If \`publish\` failed, check whether the version reached Maven Central before re-running:
           https://repo1.maven.org/maven2/com/guidedbyte/northpost-parser/
+
+          If \`update-readme\` failed with "GitHub Actions is not permitted to create or approve
+          pull requests", enable Settings > Actions > General > "Allow GitHub Actions to create
+          and approve pull requests" and re-run the failed job. If it failed because README.md
+          no longer matched the version patterns, fix the snippets by hand and update the
+          \`sed\` patterns in \`release.yml\`.
 
           To retry: \`gh workflow run release.yml --ref $GITHUB_REF_NAME\`
           BODY
