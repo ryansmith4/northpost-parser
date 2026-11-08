@@ -116,6 +116,24 @@ compileJava {
     options.release = 21
 }
 
+// NAR regression sample (src/test/resources/nar_sample_addresses.csv) — see NarSampleGenerator
+tasks.register('refreshNarSample', JavaExec) {
+    group = 'verification'
+    description = 'Re-records the expected parser output for the addresses already in the NAR regression sample (no NAR data needed).'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.guidedbyte.address.NarSampleGenerator'
+    args 'refresh'
+}
+
+tasks.register('drawNarSample', JavaExec) {
+    group = 'verification'
+    description = 'Redraws the NAR regression sample from nar-data/NAR_*.zip (deterministic; takes a few minutes).'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.guidedbyte.address.NarSampleGenerator'
+    args 'draw'
+    maxHeapSize = '1g'
+}
+
 compileTestJava {
     options.release = 21
 }

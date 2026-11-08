@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.guidedbyte.address.service.AddressParserService;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -14,8 +13,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -44,7 +41,8 @@ import org.junit.jupiter.params.provider.MethodSource;
  * <p><b>Setup:</b> Download a NAR zip from <a
  * href="https://www150.statcan.gc.ca/n1/pub/46-26-0002/462600022022001-eng.htm">Statistics Canada NAR</a> and place it
  * in the {@code nar-data/} directory at the project root. The zip contains {@code Addresses/Address_XX[_part_N].csv}
- * files organized by numeric province code (e.g., 35 = ON, 48 = AB). The test maps these automatically.
+ * files organized by numeric province code (e.g., 35 = ON, 48 = AB). The test maps these automatically. Reading the CSV
+ * rows and building the address text is shared with {@link NarSampleGenerator} through {@link NarCsv}.
  *
  * <p>For each NAR row, this test constructs a mailing address from the MAIL_* fields, parses it, and compares all
  * extracted fields against NAR ground truth: unit number, street number, street name, street type, street direction,
@@ -57,48 +55,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("NAR Bulk Validation")
 class NarBulkValidationTest {
 
-    private static final Path NAR_DIR = Path.of("nar-data");
     private static final Path REPORT_DIR = Path.of("build/reports/nar-bulk");
-
-    // NAR CSV column indices (0-based)
-    private static final int COL_APT_NO_LABEL = 2;
-    private static final int COL_CIVIC_NO = 3;
-    private static final int COL_CIVIC_NO_SUFFIX = 4;
-    private static final int COL_MAIL_STREET_NAME = 13;
-    private static final int COL_MAIL_STREET_TYPE = 14;
-    private static final int COL_MAIL_STREET_DIR = 15;
-    private static final int COL_MAIL_MUN_NAME = 16;
-    private static final int COL_MAIL_PROV_ABVN = 17;
-    private static final int COL_MAIL_POSTAL_CODE = 18;
-    private static final int MIN_COLUMNS = 19;
-
-    /** Statistics Canada Standard Geographical Classification numeric codes → 2-letter province abbreviations. */
-    private static final Map<String, String> SGC_TO_PROV = Map.ofEntries(
-            Map.entry("10", "NL"),
-            Map.entry("11", "PE"),
-            Map.entry("12", "NS"),
-            Map.entry("13", "NB"),
-            Map.entry("24", "QC"),
-            Map.entry("35", "ON"),
-            Map.entry("46", "MB"),
-            Map.entry("47", "SK"),
-            Map.entry("48", "AB"),
-            Map.entry("59", "BC"),
-            Map.entry("60", "YT"),
-            Map.entry("61", "NT"),
-            Map.entry("62", "NU"));
-
-    /** Reverse mapping: 2-letter abbreviation → SGC code. */
-    private static final Map<String, String> PROV_TO_SGC;
-
-    static {
-        var map = new HashMap<String, String>();
-        SGC_TO_PROV.forEach((sgc, prov) -> map.put(prov, sgc));
-        PROV_TO_SGC = Map.copyOf(map);
-    }
-
-    private static final Pattern CSV_PATTERN =
-            Pattern.compile("Addresses/Address_(\\d{2})(?:_part_\\d+)?\\.csv", Pattern.CASE_INSENSITIVE);
 
     private static final int WORKER_THREADS = Runtime.getRuntime().availableProcessors();
     private static final int QUEUE_CAPACITY = 10_000;
@@ -173,18 +130,8 @@ class NarBulkValidationTest {
     }
 
     static Stream<Arguments> narProvinces() throws IOException {
-        if (!Files.isDirectory(NAR_DIR)) {
-            return Stream.empty();
-        }
-
-        // Find all NAR zip files
-        List<Path> zips = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(NAR_DIR, "NAR_*.zip")) {
-            for (Path zip : stream) {
-                zips.add(zip);
-            }
-        }
-        if (zips.isEmpty()) {
+        Optional<Path> zip = NarCsv.findZip();
+        if (zip.isEmpty()) {
             return Stream.empty();
         }
 
@@ -196,32 +143,8 @@ class NarBulkValidationTest {
             }
         }
 
-        // Scan zip contents and group CSV entries by province
-        // Use the first (or only) zip file found
-        Path zipPath = zips.get(0);
-        Map<String, List<String>> provinceCsvs = new TreeMap<>();
-
-        try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
-            var entries = zipFile.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry entry = entries.nextElement();
-                Matcher m = CSV_PATTERN.matcher(entry.getName());
-                if (m.matches()) {
-                    String sgcCode = m.group(1);
-                    String prov = SGC_TO_PROV.get(sgcCode);
-                    if (prov != null && (allowedProvinces.isEmpty() || allowedProvinces.contains(prov))) {
-                        provinceCsvs
-                                .computeIfAbsent(prov, k -> new ArrayList<>())
-                                .add(entry.getName());
-                    }
-                }
-            }
-        }
-
-        // Sort CSV entries within each province so parts are processed in order
-        provinceCsvs.values().forEach(Collections::sort);
-
-        return provinceCsvs.entrySet().stream().map(e -> Arguments.of(e.getKey(), zipPath, e.getValue()));
+        Map<String, List<String>> provinceCsvs = NarCsv.provinceEntries(zip.get(), allowedProvinces);
+        return provinceCsvs.entrySet().stream().map(e -> Arguments.of(e.getKey(), zip.get(), e.getValue()));
     }
 
     private void processCsvEntry(
@@ -259,106 +182,28 @@ class NarBulkValidationTest {
         }
     }
 
-    /**
-     * Parse a CSV line respecting RFC 4180 quoted fields. Fields containing commas, quotes, or newlines are enclosed in
-     * double quotes; embedded quotes are escaped as "". A naive split(",") fails on NAR rows where CSD names contain
-     * commas (e.g., {@code "Kings, Subd. A"}).
-     */
-    private static String[] parseCsvLine(String line) {
-        List<String> fields = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean inQuotes = false;
-
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (inQuotes) {
-                if (c == '"') {
-                    if (i + 1 < line.length() && line.charAt(i + 1) == '"') {
-                        current.append('"');
-                        i++; // skip escaped quote
-                    } else {
-                        inQuotes = false;
-                    }
-                } else {
-                    current.append(c);
-                }
-            } else {
-                if (c == '"') {
-                    inQuotes = true;
-                } else if (c == ',') {
-                    fields.add(current.toString());
-                    current.setLength(0);
-                } else {
-                    current.append(c);
-                }
-            }
-        }
-        fields.add(current.toString());
-        return fields.toArray(new String[0]);
-    }
-
     private void processRow(String csvLine, String province, BulkStats stats) {
-        String[] fields = parseCsvLine(csvLine);
-        if (fields.length < MIN_COLUMNS) {
+        String[] fields = NarCsv.splitLine(csvLine);
+        if (fields.length < NarCsv.MIN_COLUMNS) {
             stats.skip("short_row");
             return;
         }
 
-        String civicNo = fields[COL_CIVIC_NO].trim();
-        String civicSuffix = fields[COL_CIVIC_NO_SUFFIX].trim();
-        String mailStreetName = fields[COL_MAIL_STREET_NAME].trim();
-        String mailStreetType = fields[COL_MAIL_STREET_TYPE].trim();
-        String mailStreetDir = fields[COL_MAIL_STREET_DIR].trim();
-        String mailMunName = fields[COL_MAIL_MUN_NAME].trim();
-        String mailProvAbvn = fields[COL_MAIL_PROV_ABVN].trim();
-        String mailPostalCode = fields[COL_MAIL_POSTAL_CODE].trim();
-        String aptLabel = fields[COL_APT_NO_LABEL].trim();
-
-        // Skip rows without civic number or mailing street name — these are non-civic (PO box only)
-        if (civicNo.isEmpty() || mailStreetName.isEmpty()) {
+        NarCsv.Row row = NarCsv.toRow(fields, province);
+        if (row == null) {
             stats.skip("no_civic_or_mail_street");
             return;
         }
 
-        // Build the street number (civic number + optional suffix)
-        String streetNo = civicNo;
-        if (!civicSuffix.isEmpty()) {
-            streetNo = civicNo + civicSuffix;
-        }
-
-        // Build delivery line: [APT x] streetNo streetName [streetType] [streetDir]
-        StringBuilder deliveryLine = new StringBuilder();
-        if (!aptLabel.isEmpty()) {
-            deliveryLine.append("APT ").append(aptLabel).append(" ");
-        }
-        deliveryLine.append(streetNo);
-        deliveryLine.append(" ").append(mailStreetName);
-        if (!mailStreetType.isEmpty()) {
-            deliveryLine.append(" ").append(mailStreetType);
-        }
-        if (!mailStreetDir.isEmpty()) {
-            deliveryLine.append(" ").append(mailStreetDir);
-        }
-
-        // Build region line: municipality province  postalCode
-        StringBuilder regionLine = new StringBuilder();
-        if (!mailMunName.isEmpty()) regionLine.append(mailMunName);
-        if (!mailProvAbvn.isEmpty()) {
-            if (!regionLine.isEmpty()) regionLine.append(" ");
-            regionLine.append(mailProvAbvn);
-        } else {
-            // Use the province from the test parameter if MAIL_PROV_ABVN is missing
-            if (!regionLine.isEmpty()) regionLine.append(" ");
-            regionLine.append(province);
-        }
-        if (!mailPostalCode.isEmpty()) {
-            if (!regionLine.isEmpty()) regionLine.append("  ");
-            regionLine.append(mailPostalCode);
-        }
-
-        String delivery = deliveryLine.toString();
-        String fullAddress =
-                "TEST PERSON\n" + delivery + "\n" + regionLine.toString().trim();
+        String aptLabel = row.unit();
+        String streetNo = row.streetNumber();
+        String mailStreetName = row.streetName();
+        String mailStreetType = row.streetType();
+        String mailStreetDir = row.streetDirection();
+        String mailMunName = row.municipality();
+        String mailPostalCode = row.postalCode();
+        String delivery = row.deliveryLine();
+        String fullAddress = row.addressText();
 
         stats.total(province);
 
@@ -432,7 +277,7 @@ class NarBulkValidationTest {
         }
 
         // Province
-        String expectedProv = mailProvAbvn.isEmpty() ? province : mailProvAbvn;
+        String expectedProv = row.province();
         stats.hasField("province", province);
         if (c.province().equalsIgnoreCase(expectedProv)) {
             stats.match("province", province);

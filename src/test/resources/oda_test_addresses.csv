@@ -1,3 +1,7 @@
+# Curated ODA test addresses for NorthPost Parser.
+# Contains information licensed under the Open Government Licence – Canada
+# (https://open.canada.ca/en/open-government-licence-canada), from Statistics Canada's Open Database of Addresses.
+#
 address|expStreetNo|expStreetName|expStreetType|expStreetDir|expUnit|expCity|expProvince|expPostalCode
 # === BC English addresses ===
 # Simple street types
