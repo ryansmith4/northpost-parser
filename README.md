@@ -267,13 +267,17 @@ Not all ODA provinces provide all structured fields — "Addresses Tested" refle
 
 ## Tech Stack
 
-| Component | Version |
-|-----------|---------|
-| Java | 21 |
-| ANTLR | 4.13.1 |
-| Gradle | 9.4.0 |
-| JUnit | 5 |
-| AssertJ | 3.24.2 |
+| Component | Role |
+|-----------|------|
+| Java 21 | Minimum version to build and to run |
+| ANTLR 4 | Generates the parser at build time; `antlr4-runtime` ships as a dependency |
+| SLF4J API | Logging facade shipped as a dependency; you provide the implementation |
+| Gradle | Build, through the included wrapper |
+| JUnit, AssertJ, Logback | Tests only; nothing ships in the artifact |
+
+Exact versions live in [`gradle/libs.versions.toml`](gradle/libs.versions.toml) and
+[`gradle/wrapper/gradle-wrapper.properties`](gradle/wrapper/gradle-wrapper.properties), where
+Dependabot keeps them current.
 
 ## Versioning
 
