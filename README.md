@@ -13,6 +13,11 @@ A Canadian postal address parser that converts free-form address text into struc
 
 Pure Java library with no framework dependencies. Validated against **9.6 million+** [Statistics Canada ODA](https://www.statcan.gc.ca/en/lode/databases/oda) and **16.4 million+** [Statistics Canada NAR](https://www150.statcan.gc.ca/n1/pub/46-26-0002/462600022022001-eng.htm) addresses with a **100% parse success rate** and **99.99% true field-level accuracy**.
 
+A standalone [Python Poetry project](python/README.md) is also available in
+[`python/`](python/), with a Python port of the library and ANTLR4-generated
+Python sources from the same grammar. The Java project and build remain unchanged.
+The large-dataset validation figures above describe the Java implementation.
+
 ## Installation
 
 ### Gradle
@@ -43,7 +48,7 @@ implementation("com.guidedbyte:northpost-parser:1.1.0")
 - **English and French** — recognizes ~110 English and ~25 French street types, bilingual directionals (N/S/E/W, NORD/SUD/EST/OUEST), and French linking particles (DE, DU, DES, etc.)
 - **Smart disambiguation** — French type-first detection (RUE PRINCIPALE), lettered avenues (AVENUE P), opposing direction pairs (EAST WEST RD), French article prefixes (GRANDE ALLEE), type-as-name guard (AVENUE RD → name=AVENUE, type=RD)
 - **Preserves what you write** — hyphens (2E-ET-3E), slashes (36/37), ampersands (6 & 10), spaced dashes (RD - RTE 113), and parentheses (DRIVEWAY (THE)) retained in street names
-- **All delivery types** — civic addresses, PO boxes (PO BOX / CP / C.P.), rural routes (RR), general delivery (GD), and mixed
+- **All delivery types** — civic addresses, PO boxes (PO BOX / CP / C.P / C.P. / CASE POSTALE), rural routes (RR), general delivery (GD), and mixed
 - **Flexible input** — handles multi-line (Canada Post format), single-line with commas, lowercase, extra whitespace, accented characters, and various abbreviations
 - **Three parsing modes** — `LENIENT` (extract what's available), `STRICT` (reject incomplete addresses), and `AUTO` (try strict, fall back to lenient)
 - **Zero framework dependencies** — depends only on ANTLR runtime and SLF4J
@@ -97,6 +102,32 @@ var result = parser.parseAddress(address, ParsingStrategy.STRICT);
 // Auto — tries strict, falls back to lenient
 var result = parser.parseAddress(address, ParsingStrategy.STRICT_THEN_LENIENT);
 ```
+
+### Optional field extraction
+
+Existing calls automatically extract addressee and postal code. When you know
+either field is absent, disable its extraction:
+
+```java
+var result = parser.parseAddress("MAIN ST\nTORONTO ON", false, false);
+// Arguments after the address: hasAddressee, hasPostalCode.
+var strict = parser.parseAddress(address, ParsingStrategy.STRICT, false, false);
+var batch = parser.parseAddresses(addresses, ParsingStrategy.LENIENT, false, false);
+```
+
+With `hasAddressee=false`, unanchored lines are interpreted as delivery information
+instead of addressee text. With `hasPostalCode=false`, the postal-code field stays
+empty and cannot be used to infer a province. Postal-code tokens can still be
+recognized structurally to keep municipality and delivery lines separate.
+Strict mailing-validity requirements are unchanged: disabling either field
+causes strict parsing to reject an otherwise complete address.
+The incomplete-address warning respects these flags: intentionally omitted fields
+do not trigger it, but missing delivery, municipality, or province still do.
+Strict rejection errors and strict-to-lenient fallback warnings are unchanged.
+
+With `hasAddressee=false`, `street name, number` delivery lines such as
+`BRIDGE ROAD, 5` retain the full street name `BRIDGE ROAD` and extract civic
+number `5`, without splitting off a street type.
 
 ## Supported Address Formats
 
@@ -167,7 +198,7 @@ Lines are classified using **anchor-based detection** rather than fixed position
 | Region | Last line (positional — Canada Post convention) |
 | Delivery | Lines starting with a civic number, PO/CP/BOX, RR, GD, GENERAL, or unit designator |
 | Care-of | Lines matching C/O or A/S pattern |
-| Site info | Lines starting with SITE, COMP, or EMPL |
+| Site info | Lines starting with SITE, COMP, or EMPL; a same-line rural route is extracted separately (`SITE 4 BOX 23 RR 5` → site `SITE 4 BOX 23`, route `5`) |
 | Addressee | First line with no recognized delivery anchor |
 | Subsequent unanchored | Routed through delivery interpretation |
 

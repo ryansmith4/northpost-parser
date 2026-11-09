@@ -742,7 +742,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     private static final Set<String> COUNTRY_KEYWORDS = Set.of("CANADA", "CAN", "CA");
 
     /** PO Box keywords (English and French) */
-    private static final Set<String> PO_BOX_KEYWORDS = Set.of("PO", "P.O.", "CP", "C.P.", "BOX");
+    private static final Set<String> PO_BOX_KEYWORDS = Set.of("PO", "P.O.", "CP", "C.P", "C.P.", "BOX");
 
     /** Postal code pattern: A1A 1A1 or A1A1A1 */
     private static final Pattern POSTAL_CODE_FSA = Pattern.compile("[A-Z]\\d[A-Z]");
@@ -752,12 +752,20 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     // ---- Instance state ----
 
     private final AddressComponents.Builder builder = AddressComponents.builder();
+    private final boolean hasAddressee;
+    private final boolean hasPostalCode;
 
     public AddressComponentVisitor() {
         this(ParsingMode.LENIENT);
     }
 
     public AddressComponentVisitor(ParsingMode parsingMode) {
+        this(parsingMode, true, true);
+    }
+
+    public AddressComponentVisitor(ParsingMode parsingMode, boolean hasAddressee, boolean hasPostalCode) {
+        this.hasAddressee = hasAddressee;
+        this.hasPostalCode = hasPostalCode;
         builder.parsingMode(parsingMode);
     }
 
@@ -834,7 +842,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             if (regionLineIndex >= 1 && isPostalCodeOnlyLine(parsedLines.get(regionLineIndex))) {
                 String pc = findPostalCode(parsedLines.get(regionLineIndex));
                 if (pc != null) {
-                    builder.postalCode(pc);
+                    setPostalCode(pc);
                     logger.debug("Peeled postal-code-only line: '{}'", pc);
                     regionLineIndex--;
                 }
@@ -858,14 +866,14 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 switch (cl.role()) {
                     case DELIVERY -> interpretDeliveryLine(cl.line());
                     case CARE_OF -> builder.careOf(extractAfterCareOf(cl.line().tokens));
-                    case SITE_INFO -> builder.siteInfo(cl.line().text);
+                    case SITE_INFO -> interpretSiteLine(cl.line());
                     case COUNTRY -> builder.country(cl.line().text);
                     case POSTAL_CODE_ONLY -> {
                         String pc = findPostalCode(cl.line());
-                        if (pc != null) builder.postalCode(pc);
+                        if (pc != null) setPostalCode(pc);
                     }
                     case ADDRESSEE -> {
-                        if (!addresseeSeen) {
+                        if (hasAddressee && !addresseeSeen) {
                             interpretAddresseeLine(cl.line());
                             addresseeSeen = true;
                         } else {
@@ -899,7 +907,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // Check if it looks like just a postal code
         if (line.tokens.size() <= 3 && findPostalCode(line) != null) {
             String pc = findPostalCode(line);
-            builder.postalCode(pc);
+            setPostalCode(pc);
             return;
         }
         // Otherwise, treat the whole line as the addressee and attempt region extraction
@@ -908,7 +916,15 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     private void interpretAddresseeLine(LineTokens line) {
-        builder.addressee(line.text);
+        if (hasAddressee) {
+            builder.addressee(line.text);
+        } else {
+            interpretDeliveryLine(line);
+        }
+    }
+
+    private void setPostalCode(String postalCode) {
+        if (hasPostalCode) builder.postalCode(postalCode);
     }
 
     private void interpretRegionLine(LineTokens line) {
@@ -953,7 +969,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
 
             if (postalCode != null) {
-                builder.postalCode(postalCode);
+                setPostalCode(postalCode);
                 logger.debug("Found postal code: '{}'", postalCode);
             }
         }
@@ -1086,13 +1102,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
 
         // Check for PO Box: starts with PO, CP, BOX, P.O., C.P.
-        if (PO_BOX_KEYWORDS.contains(firstText)) {
+        if (isPostalBoxLine(tokens)) {
             interpretPoBoxLine(tokens);
             return;
         }
 
-        // Check for Rural Route: starts with RR or R.R.
-        if (firstText.equals("RR") || firstText.equals("R.R.")) {
+        if (isRuralRouteLine(tokens)) {
             interpretRuralRouteLine(tokens);
             return;
         }
@@ -1105,7 +1120,31 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Check for site info: starts with SITE or COMP
         if (firstText.equals("SITE") || firstText.equals("COMP") || firstText.equals("EMPL")) {
-            builder.siteInfo(line.text);
+            interpretSiteLine(line);
+            return;
+        }
+
+        if (!hasAddressee
+                && tokens.size() >= 3
+                && firstToken.type == CanadianAddressParser.WORD
+                && tokens.get(tokens.size() - 2).type == CanadianAddressParser.COMMA
+                && tokens.getLast().type == CanadianAddressParser.NUMBER
+                && tokens.subList(0, tokens.size() - 2).stream()
+                        .allMatch(t -> t.type == CanadianAddressParser.WORD
+                                || t.type == CanadianAddressParser.NUMBER
+                                || t.type == CanadianAddressParser.ALPHANUMERIC)) {
+            builder.streetNumber(tokens.getLast().text);
+            builder.streetName(String.join(" ", collectStreetWords(tokens.subList(0, tokens.size() - 2), 0, null)));
+            builder.streetType("");
+            builder.streetDirection("");
+            builder.addressType(AddressType.CIVIC);
+            return;
+        }
+
+        // A hyphenated unit-civic form takes precedence over interpreting PH as a
+        // unit designator (e.g., PH-456 means unit PH at civic number 456).
+        if (isUnitHyphenCivicPattern(tokens)) {
+            interpretCivicLine(tokens);
             return;
         }
 
@@ -1170,14 +1209,26 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
     // ---- Delivery line sub-interpreters ----
 
+    private static boolean isUnitHyphenCivicPattern(List<TokenInfo> tokens) {
+        if (tokens.size() < 3
+                || tokens.get(1).type != CanadianAddressParser.HYPHEN
+                || tokens.get(2).type != CanadianAddressParser.NUMBER) {
+            return false;
+        }
+
+        TokenInfo unit = tokens.get(0);
+        return unit.type == CanadianAddressParser.NUMBER
+                || unit.type == CanadianAddressParser.ALPHANUMERIC
+                || (unit.type == CanadianAddressParser.WORD
+                        && (unit.text.equalsIgnoreCase("PH")
+                                || (unit.text.length() == 1 && Character.isLetter(unit.text.charAt(0)))));
+    }
+
     private void interpretCivicLine(List<TokenInfo> tokens) {
         int idx;
 
-        // Check for unit-hyphen-civic pattern: 10-123 (NUMBER HYPHEN NUMBER)
-        if (tokens.size() >= 3
-                && tokens.get(0).type == CanadianAddressParser.NUMBER
-                && tokens.get(1).type == CanadianAddressParser.HYPHEN
-                && tokens.get(2).type == CanadianAddressParser.NUMBER) {
+        // Check for unit-hyphen-civic patterns: 10-123, 5B-456, or PH-456.
+        if (isUnitHyphenCivicPattern(tokens)) {
             builder.unitNumber(tokens.get(0).text);
             builder.streetNumber(tokens.get(2).text);
             idx = 3;
@@ -1673,6 +1724,23 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
     }
 
+    private void interpretSiteLine(LineTokens line) {
+        List<TokenInfo> tokens = line.tokens;
+        for (int idx = 1; idx < tokens.size(); idx++) {
+            List<TokenInfo> suffix = tokens.subList(idx, tokens.size());
+            if (isRuralRouteLine(suffix)) {
+                String first = suffix.get(0).text.toUpperCase();
+                int prefixLength = first.equals("RR") || first.equals("R.R.") ? 1 : 2;
+                if (suffix.size() > prefixLength && suffix.get(prefixLength).type == CanadianAddressParser.NUMBER) {
+                    builder.siteInfo(buildText(tokens.subList(0, idx)));
+                    interpretRuralRouteLine(suffix);
+                    return;
+                }
+            }
+        }
+        builder.siteInfo(line.text);
+    }
+
     private void interpretRuralRouteLine(List<TokenInfo> tokens) {
         builder.addressType(AddressType.RURAL_ROUTE);
         // Find the route number (first NUMBER after RR)
@@ -1690,6 +1758,24 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     // ---- Helper methods ----
+
+    private static boolean isPostalBoxLine(List<TokenInfo> tokens) {
+        if (tokens.isEmpty()) return false;
+        return PO_BOX_KEYWORDS.contains(tokens.get(0).text.toUpperCase())
+                || (tokens.size() >= 2
+                        && tokens.get(0).text.equalsIgnoreCase("CASE")
+                        && tokens.get(1).text.equalsIgnoreCase("POSTALE"));
+    }
+
+    private static boolean isRuralRouteLine(List<TokenInfo> tokens) {
+        if (tokens.isEmpty()) return false;
+        String first = tokens.get(0).text.toUpperCase();
+        return first.equals("RR")
+                || first.equals("R.R.")
+                || (tokens.size() >= 2
+                        && stripPeriod(first).equals("R")
+                        && stripPeriod(tokens.get(1).text.toUpperCase()).equals("R"));
+    }
 
     private boolean isCareOfLine(List<TokenInfo> tokens) {
         // Pattern: WORD('C') SLASH WORD('O') or WORD('A') SLASH WORD('S')
@@ -1918,7 +2004,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (tokens.isEmpty()) return false;
         TokenInfo first = tokens.get(0);
         // Starts with a number → likely a civic address (e.g., "123 MAIN ST")
-        if (first.type == CanadianAddressParser.NUMBER || first.type == CanadianAddressParser.ALPHANUMERIC) {
+        if (first.type == CanadianAddressParser.NUMBER
+                || first.type == CanadianAddressParser.ALPHANUMERIC
+                || isUnitHyphenCivicPattern(tokens)) {
             return true;
         }
         // Starts with parenthetical number → civic address with parens (e.g., "(3195) MAIN ST")
@@ -1930,7 +2018,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
         String firstText = first.text.toUpperCase();
         // Starts with PO Box, RR, GD, or unit designator → delivery line
-        if (PO_BOX_KEYWORDS.contains(firstText) || firstText.equals("RR") || firstText.equals("GD")) {
+        if (isPostalBoxLine(tokens) || isRuralRouteLine(tokens) || firstText.equals("GD")) {
             return true;
         }
         // "GENERAL DELIVERY" or "GEN DEL" patterns
