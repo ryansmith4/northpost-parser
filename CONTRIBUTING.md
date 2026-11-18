@@ -12,6 +12,17 @@ Thank you for your interest in contributing! Here's how to get started.
 
 ## Making Changes
 
+For the Python library, install Python 3.11+ and Poetry, then run:
+
+```bash
+cd python
+poetry install
+poetry run pytest
+poetry build
+```
+
+See the [Python project guide](python/README.md) for API usage and code generation.
+
 1. Fork the repository and create a feature branch from `main`
 2. Make your changes
 3. Ensure all tests pass: `./gradlew build`
@@ -36,6 +47,9 @@ If your change involves the ANTLR grammar (`src/main/antlr/CanadianAddress.g4`),
 - The grammar is deliberately minimal — it produces structural tokens only
 - Semantic interpretation belongs in `AddressComponentVisitor`, not the grammar
 - Adding a new street type or abbreviation is a lookup table update in the visitor
+- Keep the Java and Python semantic visitors in sync
+- Regenerate Python sources with `cd python && poetry run python scripts/generate_parser.py`
+  and verify with `poetry run python scripts/generate_parser.py --check` from that directory
 
 ## Testing
 
