@@ -12,8 +12,12 @@ on:
 permissions:
   contents: read
 
+# A pull request keeps one run per branch and cancels the older one. A push to main
+# gets a group of its own per commit: runs that share a group queue one deep, so when
+# several Dependabot merges land within a minute the middle ones would be dropped while
+# waiting, and with them the auto-release job for that commit.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -67,10 +71,17 @@ jobs:
   # Fails a PR that adds or upgrades to a dependency with a known advisory, so a
   # vulnerable version never reaches main. The action compares this PR's dependency
   # snapshot against main's, so the PR snapshot is submitted first.
+  #
+  # Skipped for pull requests from forks: GitHub gives those a read-only token, so the
+  # snapshot cannot be submitted and the job would always fail. A skipped job counts as
+  # passing if this is made a required check; dependency changes in a fork pull request
+  # are reviewed by hand.
   dependency-review:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
       pull-requests: write

@@ -33,10 +33,28 @@ jobs:
           echo "Dependencies: $DEPENDENCIES -> $label"
           gh pr edit "$PR_URL" --add-label "$label"
 
-      # Auto-merge waits for the required status checks ("Java 21" / "Java 25")
-      # configured in the main branch ruleset before merging.
+      # The merge is made as a GitHub App rather than with GITHUB_TOKEN. GitHub starts no
+      # workflow for a push made with GITHUB_TOKEN, so a merge made that way never ran CI
+      # on main: main got no dependency snapshot for the next pull request to be compared
+      # against, and the auto-release job in ci.yml could never fire.
+      #
+      # The app is installed on this repository only, with Contents, Pull requests and
+      # Workflows set to read and write. Its client ID and private key are stored as
+      # Dependabot secrets, because a workflow started by a Dependabot pull request
+      # cannot read Actions secrets. The token expires within the hour and is revoked
+      # when the job ends.
+      - name: Create a token for the auto-merge app
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+
+      # Auto-merge waits for the required status checks configured in the main branch
+      # ruleset before merging.
       - if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
