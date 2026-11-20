@@ -2,18 +2,20 @@ name: Auto-merge Dependabot PRs
 
 on: pull_request
 
+# The built-in token only reads the pull request and adds a label. The merge itself is
+# made with a separate token for a GitHub App (see below).
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
   auto-merge:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # Runs only for a pull request that Dependabot opened from a branch in this
-    # repository and whose latest event Dependabot raised. The author and repository
-    # checks stop a fork from getting its own Dependabot to raise the event on a pull
-    # request against this repository.
+    # Runs only when Dependabot opened the pull request, its branch is in this
+    # repository, and Dependabot triggered this run. Without the first two checks,
+    # someone could open a pull request from a fork and have the fork's own Dependabot
+    # push to it, which would start this job.
     if: >-
       github.actor == 'dependabot[bot]' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
@@ -24,11 +26,12 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Sorts the bump for the generated release notes (.github/release.yml):
-      # runtime-dependency for libraries shipped in the artifact, tooling for the rest.
-      # The patterns match the runtime-security group in .github/dependabot.yml. The build
-      # fails if a runtime dependency is added that is not listed (monitoredRuntimeGroups
-      # in build.gradle, which names every place to update).
+      # The label does two jobs. It sorts the bump for the generated release notes
+      # (.github/release.yml): runtime-dependency for libraries shipped in the artifact,
+      # tooling for the rest. The next step also uses it to decide whether to merge.
+      # The patterns match the runtime-security group in .github/dependabot.yml. The
+      # build checks that every group in monitoredRuntimeGroups (build.gradle) appears
+      # here; the comment there names every place to update.
       - name: Label as runtime or tooling dependency
         id: label
         env:
@@ -44,12 +47,18 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
           gh pr edit "$PR_URL" --add-label "$label"
 
-      # Two kinds of update wait for a person instead of merging themselves:
+      # Only a minor or patch update merges itself, and three kinds of those still wait
+      # for a person:
       #
-      # - A new major version of anything.
-      # - An ordinary update, at any version level, to a library shipped in the
-      #   artifact. Consumers get that version through this library, and the tests here
-      #   cannot see a conflict it causes in someone else's application.
+      # - An update whose size is unknown. Dependabot does not always state it, and the
+      #   metadata action then works it out from the commit message; if it cannot, the
+      #   update is treated as if it were major.
+      # - An ordinary update to a library shipped in the artifact. Consumers get that
+      #   version through this library, and the tests here cannot see a conflict it
+      #   causes in someone else's application.
+      # - An update that changes this workflow file. The pull request's own copy of the
+      #   workflow is what runs, so merging automatically would hand the app's private
+      #   key to a new version of an action before anyone has read it.
       #
       # A security update to a shipped library still merges itself, so the fix is
       # released quickly. It is recognised by the branch name of the runtime-security
@@ -60,31 +69,42 @@ jobs:
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
           LABEL: ${{ steps.label.outputs.label }}
           BRANCH: ${{ github.head_ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          merge=true
-          reason="minor or patch update"
-          if [ "$UPDATE_TYPE" = "version-update:semver-major" ]; then
-            merge=false
-            reason="major version update"
-          elif [ "$LABEL" = "runtime-dependency" ]; then
-            case "$BRANCH" in
-              dependabot/gradle/runtime-security-*) reason="security update to a shipped library" ;;
-              *) merge=false; reason="ordinary update to a shipped library" ;;
-            esac
-          fi
+          changed=$(gh pr diff "$PR_URL" --name-only)
+          merge=false
+          case "$UPDATE_TYPE" in
+            version-update:semver-minor|version-update:semver-patch)
+              if printf '%s\n' "$changed" | grep -qxF '.github/workflows/dependabot-auto-merge.yml'; then
+                reason="changes the workflow that holds the app key"
+              elif [ "$LABEL" = "runtime-dependency" ]; then
+                case "$BRANCH" in
+                  dependabot/gradle/runtime-security-*) merge=true; reason="security update to a shipped library" ;;
+                  *) reason="ordinary update to a shipped library" ;;
+                esac
+              else
+                merge=true
+                reason="minor or patch update to tooling"
+              fi
+              ;;
+            version-update:semver-major) reason="major version update" ;;
+            *) reason="update size unknown ('$UPDATE_TYPE')" ;;
+          esac
           echo "Auto-merge: $merge ($reason)"
           echo "merge=$merge" >> "$GITHUB_OUTPUT"
 
-      # The merge is made as a GitHub App rather than with GITHUB_TOKEN. GitHub starts no
-      # workflow for a push made with GITHUB_TOKEN, so a merge made that way never ran CI
-      # on main: main got no dependency snapshot for the next pull request to be compared
-      # against, and the auto-release job in ci.yml could never fire.
+      # The merge is made as a GitHub App, not with GITHUB_TOKEN. GitHub starts no
+      # workflow for a push made with GITHUB_TOKEN, so a merge made that way would not
+      # run CI on main: main would get no dependency snapshot for the next pull request
+      # to be compared against, and the auto-release job in ci.yml would never run.
       #
       # The app is installed on this repository only, with Contents and Pull requests
-      # set to read and write. Its client ID and private key are stored as
-      # Dependabot secrets, because a workflow started by a Dependabot pull request
-      # cannot read Actions secrets. The token expires within the hour and is revoked
-      # when the job ends.
+      # set to read and write. Its client ID and private key are stored as Dependabot
+      # secrets, because a workflow started by a Dependabot pull request cannot read
+      # Actions secrets. The token expires within the hour and is revoked when the job
+      # ends. Guard the private key like the release secrets: it can write to the
+      # repository and merge its own pull requests.
       - name: Create a token for the auto-merge app
         if: steps.decide.outputs.merge == 'true'
         id: app-token
