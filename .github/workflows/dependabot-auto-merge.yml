@@ -10,7 +10,14 @@ jobs:
   auto-merge:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    if: github.actor == 'dependabot[bot]'
+    # Runs only for a pull request that Dependabot opened from a branch in this
+    # repository and whose latest event Dependabot raised. The author and repository
+    # checks stop a fork from getting its own Dependabot to raise the event on a pull
+    # request against this repository.
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         id: metadata
