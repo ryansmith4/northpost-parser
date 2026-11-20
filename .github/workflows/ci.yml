@@ -145,6 +145,8 @@ jobs:
 
           runtime=false
           # Runtime dependencies are the [versions] keys backing `api` dependencies in build.gradle.
+          # The build fails if one is added that is not listed (monitoredRuntimeGroups in
+          # build.gradle, which names every place to update).
           if git diff HEAD~1 HEAD -- gradle/libs.versions.toml | grep -Eq '^[+-](antlr|slf4j) = '; then
             runtime=true
           fi

@@ -26,7 +26,9 @@ jobs:
 
       # Sorts the bump for the generated release notes (.github/release.yml):
       # runtime-dependency for libraries shipped in the artifact, tooling for the rest.
-      # The patterns match the runtime-security group in .github/dependabot.yml.
+      # The patterns match the runtime-security group in .github/dependabot.yml. The build
+      # fails if a runtime dependency is added that is not listed (monitoredRuntimeGroups
+      # in build.gradle, which names every place to update).
       - name: Label as runtime or tooling dependency
         id: label
         env:

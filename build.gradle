@@ -44,6 +44,37 @@ dependencies {
     testRuntimeOnly libs.logback.classic
 }
 
+// Libraries that reach consumers through this library are handled differently from build
+// and test tooling: Dependabot's ordinary updates to them wait for a manual merge, and its
+// security updates to them trigger a patch release. The automation recognises them by the
+// start of their group name, listed here and in three other places:
+//
+//   .github/workflows/dependabot-auto-merge.yml  ("Label as runtime or tooling dependency")
+//   .github/dependabot.yml                       (the runtime-security group)
+//   .github/workflows/ci.yml                     (the auto-release job's version catalog check)
+//
+// The check below fails the build when a runtime dependency is declared whose group is not
+// listed, so a new one cannot be added without the automation being told about it.
+def monitoredRuntimeGroups = ['org.antlr', 'org.slf4j']
+
+tasks.register('checkRuntimeDependencies') {
+    group = 'verification'
+    description = 'Fails if a runtime dependency is not in the list the Dependabot automation monitors.'
+    def unmonitored = configurations.runtimeClasspath.allDependencies
+        .findAll { dep -> !monitoredRuntimeGroups.any { (dep.group ?: '').startsWith(it) } }
+        .collect { dep -> "${dep.group}:${dep.name}".toString() }
+    doLast {
+        if (!unmonitored.isEmpty()) {
+            throw new GradleException(
+                "Runtime dependencies the Dependabot automation does not monitor: ${unmonitored.join(', ')}.\n" +
+                "Consumers receive these through this library. Add the group to monitoredRuntimeGroups in " +
+                "build.gradle and to the three files listed in the comment above it."
+            )
+        }
+    }
+}
+check.dependsOn 'checkRuntimeDependencies'
+
 // ANTLR configuration
 generateGrammarSource {
     maxHeapSize = "64m"
