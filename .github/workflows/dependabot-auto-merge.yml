@@ -38,8 +38,8 @@ jobs:
       # on main: main got no dependency snapshot for the next pull request to be compared
       # against, and the auto-release job in ci.yml could never fire.
       #
-      # The app is installed on this repository only, with Contents, Pull requests and
-      # Workflows set to read and write. Its client ID and private key are stored as
+      # The app is installed on this repository only, with Contents and Pull requests
+      # set to read and write. Its client ID and private key are stored as
       # Dependabot secrets, because a workflow started by a Dependabot pull request
       # cannot read Actions secrets. The token expires within the hour and is revoked
       # when the job ends.
