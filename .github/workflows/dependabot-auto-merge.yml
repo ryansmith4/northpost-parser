@@ -28,6 +28,7 @@ jobs:
       # runtime-dependency for libraries shipped in the artifact, tooling for the rest.
       # The patterns match the runtime-security group in .github/dependabot.yml.
       - name: Label as runtime or tooling dependency
+        id: label
         env:
           DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -38,7 +39,39 @@ jobs:
             *) label=tooling ;;
           esac
           echo "Dependencies: $DEPENDENCIES -> $label"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
           gh pr edit "$PR_URL" --add-label "$label"
+
+      # Two kinds of update wait for a person instead of merging themselves:
+      #
+      # - A new major version of anything.
+      # - An ordinary update, at any version level, to a library shipped in the
+      #   artifact. Consumers get that version through this library, and the tests here
+      #   cannot see a conflict it causes in someone else's application.
+      #
+      # A security update to a shipped library still merges itself, so the fix is
+      # released quickly. It is recognised by the branch name of the runtime-security
+      # group in .github/dependabot.yml, the same test the auto-release job in ci.yml uses.
+      - name: Decide whether to merge automatically
+        id: decide
+        env:
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          LABEL: ${{ steps.label.outputs.label }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          merge=true
+          reason="minor or patch update"
+          if [ "$UPDATE_TYPE" = "version-update:semver-major" ]; then
+            merge=false
+            reason="major version update"
+          elif [ "$LABEL" = "runtime-dependency" ]; then
+            case "$BRANCH" in
+              dependabot/gradle/runtime-security-*) reason="security update to a shipped library" ;;
+              *) merge=false; reason="ordinary update to a shipped library" ;;
+            esac
+          fi
+          echo "Auto-merge: $merge ($reason)"
+          echo "merge=$merge" >> "$GITHUB_OUTPUT"
 
       # The merge is made as a GitHub App rather than with GITHUB_TOKEN. GitHub starts no
       # workflow for a push made with GITHUB_TOKEN, so a merge made that way never ran CI
@@ -51,7 +84,7 @@ jobs:
       # cannot read Actions secrets. The token expires within the hour and is revoked
       # when the job ends.
       - name: Create a token for the auto-merge app
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        if: steps.decide.outputs.merge == 'true'
         id: app-token
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
@@ -60,7 +93,8 @@ jobs:
 
       # Auto-merge waits for the required status checks configured in the main branch
       # ruleset before merging.
-      - if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+      - name: Enable auto-merge
+        if: steps.decide.outputs.merge == 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}

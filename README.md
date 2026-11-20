@@ -315,6 +315,8 @@ NorthPost Parser follows [Semantic Versioning](https://semver.org/). Release tag
 
 **New enum constants are minor, but check exhaustive switches.** Adding a constant to `AddressType`, `ParsingMode`, `ParsingStrategy` or `NormalizationStrategy` does not break compiled code, but a `switch` expression over the enum with no `default` branch stops compiling. Add a `default` branch if you want to take minor upgrades without source changes.
 
+**Shipped dependencies count as part of the library.** `antlr4-runtime` and `slf4j-api` reach your application through this library, so your build may pick up the versions declared here. A new major version of either is released as at least a minor version of NorthPost Parser and named in the release notes. If it means you have to change your own setup (as SLF4J 2 did for logging backends), the release is a major version.
+
 Releases are made when the parser or a shipped dependency changes, not on a schedule. Updates to build and test tooling do not produce a release.
 
 ## License
