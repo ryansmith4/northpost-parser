@@ -309,7 +309,7 @@ NorthPost Parser follows [Semantic Versioning](https://semver.org/). Release tag
 
 - **MAJOR**: a change that breaks code compiled against or written for the public API. Removing or renaming a public type, method, constructor, builder field or enum constant counts, and so does changing what a field means (for example, moving the unit number to a different field).
 - **MINOR**: new public API, new enum constants, support for new street types or address formats, and parsing improvements that change the output for some inputs. Upgrading needs no code changes, with the enum caveat below.
-- **PATCH**: bug fixes, dependency updates for security advisories, and documentation. A patch release is cut automatically when a dependency shipped in the artifact has a security advisory, unless the fix is a new major version of that dependency (see below).
+- **PATCH**: bug fixes, dependency updates for security advisories, and documentation. A patch release is cut automatically when a dependency shipped in the artifact has a security advisory, unless that would be the wrong version number: the fix is a new major version of that dependency (see below), or other library changes are waiting to be released.
 
 **Parse output can change in a minor release.** The parser is validated against millions of real addresses, and improving accuracy means some inputs parse differently after an upgrade. Such changes are listed in the release notes. If your code depends on exact output for specific inputs, pin the minor version and test before upgrading.
 

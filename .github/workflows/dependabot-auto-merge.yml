@@ -21,7 +21,28 @@ jobs:
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # This check runs first, and every later step depends on it. A pull request runs
+      # its own copy of this workflow, so an update to one of the actions below would
+      # otherwise run the new version here, in the job that handles the app's private
+      # key, before anyone has read it. Such an update waits for a person. It is always
+      # an update to GitHub Actions, hence the tooling label.
+      - name: Hold an update that changes this workflow
+        id: guard
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          changed=$(gh pr diff "$PR_URL" --name-only)
+          if printf '%s\n' "$changed" | grep -qxF '.github/workflows/dependabot-auto-merge.yml'; then
+            echo "Auto-merge: false (changes the workflow that holds the app key)"
+            echo "hold=true" >> "$GITHUB_OUTPUT"
+            gh pr edit "$PR_URL" --add-label tooling
+          else
+            echo "hold=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        if: steps.guard.outputs.hold == 'false'
         id: metadata
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -33,6 +54,7 @@ jobs:
       # build checks that every group in monitoredRuntimeGroups (build.gradle) appears
       # here; the comment there names every place to update.
       - name: Label as runtime or tooling dependency
+        if: steps.guard.outputs.hold == 'false'
         id: label
         env:
           DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
@@ -47,38 +69,47 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
           gh pr edit "$PR_URL" --add-label "$label"
 
-      # Only a minor or patch update merges itself, and three kinds of those still wait
-      # for a person:
+      # A pull request merges itself only when every update in it is a minor or patch
+      # update. Two kinds of those still wait for a person:
       #
-      # - An update whose size is unknown. Dependabot does not always state it, and the
-      #   metadata action then works it out from the commit message; if it cannot, the
-      #   update is treated as if it were major.
+      # - A pull request where the size of any one update is unknown. Dependabot does not
+      #   always state the size, and the metadata action then works it out from the
+      #   version numbers in the commit message. The action's own summary (update-type)
+      #   ignores an update it could not size, so this step reads the full list instead.
       # - An ordinary update to a library shipped in the artifact. Consumers get that
       #   version through this library, and the tests here cannot see a conflict it
       #   causes in someone else's application.
-      # - An update that changes this workflow file. The pull request's own copy of the
-      #   workflow is what runs, so merging automatically would hand the app's private
-      #   key to a new version of an action before anyone has read it.
       #
       # A security update to a shipped library still merges itself, so the fix is
       # released quickly. It is recognised by the branch name of the runtime-security
       # group in .github/dependabot.yml, the same test the auto-release job in ci.yml uses.
       - name: Decide whether to merge automatically
+        if: steps.guard.outputs.hold == 'false'
         id: decide
         env:
-          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          UPDATES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           LABEL: ${{ steps.label.outputs.label }}
           BRANCH: ${{ github.head_ref }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          changed=$(gh pr diff "$PR_URL" --name-only)
+          size=$(python3 -c '
+          import json, os
+          minor_or_patch = {"version-update:semver-minor", "version-update:semver-patch"}
+          try:
+              sizes = [update.get("updateType") for update in json.loads(os.environ["UPDATES"])]
+          except Exception:
+              sizes = []
+          if "version-update:semver-major" in sizes:
+              print("major")
+          elif sizes and all(size in minor_or_patch for size in sizes):
+              print("minor-or-patch")
+          else:
+              print("unknown")
+          ') || size=unknown
+
           merge=false
-          case "$UPDATE_TYPE" in
-            version-update:semver-minor|version-update:semver-patch)
-              if printf '%s\n' "$changed" | grep -qxF '.github/workflows/dependabot-auto-merge.yml'; then
-                reason="changes the workflow that holds the app key"
-              elif [ "$LABEL" = "runtime-dependency" ]; then
+          case "$size" in
+            minor-or-patch)
+              if [ "$LABEL" = "runtime-dependency" ]; then
                 case "$BRANCH" in
                   dependabot/gradle/runtime-security-*) merge=true; reason="security update to a shipped library" ;;
                   *) reason="ordinary update to a shipped library" ;;
@@ -88,8 +119,8 @@ jobs:
                 reason="minor or patch update to tooling"
               fi
               ;;
-            version-update:semver-major) reason="major version update" ;;
-            *) reason="update size unknown ('$UPDATE_TYPE')" ;;
+            major) reason="major version update" ;;
+            *) reason="the size of at least one update is unknown" ;;
           esac
           echo "Auto-merge: $merge ($reason)"
           echo "merge=$merge" >> "$GITHUB_OUTPUT"

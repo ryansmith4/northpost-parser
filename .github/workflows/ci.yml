@@ -117,9 +117,10 @@ jobs:
   # test dependencies and build tooling are auto-merged without a release. A security
   # fix that reaches main on any other branch is not released by this job.
   #
-  # The release is only automatic when a patch version number is honest. If main also
-  # holds unreleased changes to the library itself, or the fix is a new major version of
-  # the dependency, the job opens an issue asking for a release by hand instead.
+  # The release is only automatic when a patch version number is honest. The job looks at
+  # everything on main since the last release tag, the fix included. If that holds changes
+  # to the library itself, or a shipped library has moved to a new major version, the job
+  # opens an issue asking for a release by hand instead.
   auto-release:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -146,44 +147,50 @@ jobs:
           pr_head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.ref // ""')
           echo "Merged PR branch: ${pr_head:-<none>}"
 
-          security=false
           case "$pr_head" in
-            dependabot/gradle/runtime-security-*) security=true ;;
+            dependabot/gradle/runtime-security-*) ;;
+            *)
+              echo "Not a runtime security update; skipping release."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
           esac
 
-          runtime=false
-          # Runtime dependencies are listed here by their key under [versions] in
-          # gradle/libs.versions.toml, not by group name. Nothing checks this list: when a
-          # runtime dependency is added, add its key here (see monitoredRuntimeGroups in
-          # build.gradle, which names every place to update).
-          catalog_diff=$(git diff HEAD~1 HEAD -- gradle/libs.versions.toml)
-          if printf '%s\n' "$catalog_diff" | grep -Eq '^[+-](antlr|slf4j) = '; then
-            runtime=true
-          fi
-
-          echo "security-update=$security runtime-dependency-changed=$runtime"
-          if [ "$security" != true ] || [ "$runtime" != true ]; then
-            echo "Not a runtime security update; skipping release."
+          if [ -n "$(git tag --points-at HEAD --list 'v*')" ]; then
+            echo "This commit already carries a release tag, so this is a re-run; skipping release."
             echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # From here on the commit is a runtime security update. Release it automatically
-          # only if the next patch number describes it honestly.
-          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          # From here on the commit is a security update to a shipped library. Release it
+          # automatically only if the next patch number describes it honestly. Every
+          # other outcome sets a reason, and the next step turns that into an issue.
           held=""
-          if [ -n "$(git tag --points-at HEAD --list 'v*')" ]; then
-            held="This commit already carries a release tag, so the job was probably re-run."
-          fi
-          for key in antlr slf4j; do
-            old=$(printf '%s\n' "$catalog_diff" | sed -n "s/^-$key = \"\([0-9]*\).*/\1/p")
-            new=$(printf '%s\n' "$catalog_diff" | sed -n "s/^+$key = \"\([0-9]*\).*/\1/p")
-            if [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ]; then
-              held="The fix moves $key from major version $old to $new, which the versioning policy releases as at least a minor version."
+
+          # The last release is the nearest release tag in main's own history, so a tag
+          # on some other commit cannot change the next version number.
+          latest=$(git describe --tags --abbrev=0 --match 'v*' HEAD~1 2>/dev/null || true)
+
+          # Runtime dependencies are listed here by their key under [versions] in
+          # gradle/libs.versions.toml, not by group name. Nothing checks this list: when a
+          # runtime dependency is added, add its key here (see monitoredRuntimeGroups in
+          # build.gradle, which names every place to update).
+          if ! git diff HEAD~1 HEAD -- gradle/libs.versions.toml | grep -Eq '^[+-](antlr|slf4j) = '; then
+            held="The pull request came from the runtime-security group, but it changed neither antlr nor slf4j in gradle/libs.versions.toml. A newly shipped library is probably missing from the list in the auto-release job of ci.yml."
+          elif [ -z "$latest" ]; then
+            held="No release tag was found in the history of main to count the next version from."
+          else
+            unreleased=$(git diff "$latest" HEAD -- gradle/libs.versions.toml)
+            for key in antlr slf4j; do
+              old=$(printf '%s\n' "$unreleased" | sed -n "s/^-$key = \"\([0-9]*\).*/\1/p")
+              new=$(printf '%s\n' "$unreleased" | sed -n "s/^+$key = \"\([0-9]*\).*/\1/p")
+              if [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ]; then
+                held="Since $latest, $key has moved from major version $old to $new, which the versioning policy releases as at least a minor version."
+              fi
+            done
+            if [ -z "$held" ] && ! git diff --quiet "$latest" HEAD -- src/main build.gradle; then
+              held="main holds changes to the library itself (src/main or build.gradle) made since $latest and not yet released, so a patch release would publish them too."
             fi
-          done
-          if [ -z "$held" ] && ! git diff --quiet "$latest" HEAD~1 -- src/main build.gradle; then
-            held="main holds changes to the library itself (src/main or build.gradle) made since $latest and not yet released, so a patch release would publish them too."
           fi
 
           if [ -n "$held" ]; then
@@ -195,6 +202,7 @@ jobs:
               echo "HELD_EOF"
             } >> "$GITHUB_OUTPUT"
           else
+            echo "latest=$latest" >> "$GITHUB_OUTPUT"
             echo "release=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -227,11 +235,12 @@ jobs:
       - name: Compute next patch version
         if: steps.detect.outputs.release == 'true'
         id: version
+        env:
+          LATEST: ${{ steps.detect.outputs.latest }}
         run: |
-          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
-          IFS=. read -r major minor patch <<< "${latest#v}"
+          IFS=. read -r major minor patch <<< "${LATEST#v}"
           next="v${major}.${minor}.$((patch + 1))"
-          echo "Latest tag: $latest -> next: $next"
+          echo "Latest tag: $LATEST -> next: $next"
           echo "tag=$next" >> "$GITHUB_OUTPUT"
 
       - name: Tag and create GitHub release
