@@ -12,8 +12,12 @@ on:
 permissions:
   contents: read
 
+# A pull request keeps one run per branch and cancels the older one. Each push to main
+# gets a group of its own, so its run is never dropped. In a shared group only one run
+# can wait, and a newer one replaces it. Dependabot merges land seconds apart, so the
+# runs in the middle, and their auto-release jobs, would be lost.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -64,13 +68,22 @@ jobs:
       - name: Generate and submit dependency graph
         uses: gradle/actions/dependency-submission@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
-  # Fails a PR that adds or upgrades to a dependency with a known advisory, so a
-  # vulnerable version never reaches main. The action compares this PR's dependency
-  # snapshot against main's, so the PR snapshot is submitted first.
+  # Fails a PR that adds or upgrades to a dependency with a known advisory, so it is
+  # flagged before merging. It blocks the merge only once this job is a required check.
+  # The action compares this PR's dependency snapshot against main's, so the PR snapshot
+  # is submitted first.
+  #
+  # Skipped for pull requests from forks: GitHub gives those a read-only token, so the
+  # snapshot cannot be submitted and the job would always fail. A skipped job counts as
+  # passing if this is made a required check; dependency changes in a fork pull request
+  # are reviewed by hand. Dependabot's pull requests come from this repository, so they
+  # are still checked.
   dependency-review:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
       pull-requests: write
@@ -93,14 +106,21 @@ jobs:
           comment-summary-in-pr: on-failure
           retry-on-snapshot-warnings: true
 
-  # Security-only auto-release. When Dependabot merges a *security* update to a runtime
-  # dependency (one that ships in the published artifact), cut a patch release so the
-  # Maven Central artifact no longer carries the vulnerable dependency.
+  # Security-only auto-release. When a Dependabot *security* update to a runtime
+  # dependency (one that ships in the published artifact) is merged, cut a patch release
+  # so the Maven Central artifact no longer carries the vulnerable dependency.
   #
   # Security PRs for runtime dependencies are identified by the "runtime-security"
   # Dependabot group (see .github/dependabot.yml), whose branches are named
-  # dependabot/gradle/runtime-security-<hash>. Ordinary version bumps, test dependencies
-  # and build tooling are merged by auto-merge but never released automatically.
+  # dependabot/gradle/runtime-security-<hash>. Nothing else is released automatically:
+  # ordinary updates to runtime dependencies wait for a manual merge, and updates to
+  # test dependencies and build tooling are auto-merged without a release. A security
+  # fix that reaches main on any other branch is not released by this job.
+  #
+  # The release is only automatic when a patch version number is honest. The job looks at
+  # everything on main since the last release tag, the fix included. If that holds changes
+  # to the library itself, or a shipped library has moved to a new major version, the job
+  # opens an issue asking for a release by hand instead.
   auto-release:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -127,33 +147,100 @@ jobs:
           pr_head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.ref // ""')
           echo "Merged PR branch: ${pr_head:-<none>}"
 
-          security=false
           case "$pr_head" in
-            dependabot/gradle/runtime-security-*) security=true ;;
+            dependabot/gradle/runtime-security-*) ;;
+            *)
+              echo "Not a runtime security update; skipping release."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
           esac
 
-          runtime=false
-          # Runtime dependencies are the [versions] keys backing `api` dependencies in build.gradle.
-          if git diff HEAD~1 HEAD -- gradle/libs.versions.toml | grep -Eq '^[+-](antlr|slf4j) = '; then
-            runtime=true
+          if [ -n "$(git tag --points-at HEAD --list 'v*')" ]; then
+            echo "This commit already carries a release tag, so this is a re-run; skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "security-update=$security runtime-dependency-changed=$runtime"
-          if [ "$security" = true ] && [ "$runtime" = true ]; then
-            echo "release=true" >> "$GITHUB_OUTPUT"
+          # From here on the commit is a security update to a shipped library. Release it
+          # automatically only if the next patch number describes it honestly. Every
+          # other outcome sets a reason, and the next step turns that into an issue.
+          held=""
+
+          # The last release is the nearest release tag in main's own history, so a tag
+          # on some other commit cannot change the next version number.
+          latest=$(git describe --tags --abbrev=0 --match 'v*' HEAD~1 2>/dev/null || true)
+
+          # Runtime dependencies are listed here by their key under [versions] in
+          # gradle/libs.versions.toml, not by group name. Nothing checks this list: when a
+          # runtime dependency is added, add its key here (see monitoredRuntimeGroups in
+          # build.gradle, which names every place to update).
+          if ! git diff HEAD~1 HEAD -- gradle/libs.versions.toml | grep -Eq '^[+-](antlr|slf4j) = '; then
+            held="The pull request came from the runtime-security group, but it changed neither antlr nor slf4j in gradle/libs.versions.toml. A newly shipped library is probably missing from the list in the auto-release job of ci.yml."
+          elif [ -z "$latest" ]; then
+            held="No release tag was found in the history of main to count the next version from."
           else
-            echo "Not a runtime security update; skipping release."
-            echo "release=false" >> "$GITHUB_OUTPUT"
+            unreleased=$(git diff "$latest" HEAD -- gradle/libs.versions.toml)
+            for key in antlr slf4j; do
+              old=$(printf '%s\n' "$unreleased" | sed -n "s/^-$key = \"\([0-9]*\).*/\1/p")
+              new=$(printf '%s\n' "$unreleased" | sed -n "s/^+$key = \"\([0-9]*\).*/\1/p")
+              if [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ]; then
+                held="Since $latest, $key has moved from major version $old to $new, which the versioning policy releases as at least a minor version."
+              fi
+            done
+            if [ -z "$held" ] && ! git diff --quiet "$latest" HEAD -- src/main build.gradle; then
+              held="main holds changes to the library itself (src/main or build.gradle) made since $latest and not yet released, so a patch release would publish them too."
+            fi
           fi
+
+          if [ -n "$held" ]; then
+            echo "Not releasing automatically: $held"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "held<<HELD_EOF"
+              echo "$held"
+              echo "HELD_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=$latest" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The security fix is on main but was not published. Automated runs email nobody,
+      # so leave an issue.
+      - name: Ask for a manual release
+        if: steps.detect.outputs.held != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HELD: ${{ steps.detect.outputs.held }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          gh label create release-needed --repo "$GITHUB_REPOSITORY" --force \
+            --color D93F0B --description "A security fix is on main and needs a release by hand"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Security fix needs a manual release: ${COMMIT_MSG%%$'\n'*}" \
+            --label release-needed \
+            --body "$(cat <<BODY
+          A Dependabot security update to a shipped library was merged in \`$GITHUB_SHA\`, but the
+          automatic patch release did not run.
+
+          Reason: $HELD
+
+          The fix is on main and is not on Maven Central until a release is published. Choose
+          the version number under the README's Versioning section and publish a GitHub release
+          with a \`vX.Y.Z\` tag.
+          BODY
+          )"
 
       - name: Compute next patch version
         if: steps.detect.outputs.release == 'true'
         id: version
+        env:
+          LATEST: ${{ steps.detect.outputs.latest }}
         run: |
-          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
-          IFS=. read -r major minor patch <<< "${latest#v}"
+          IFS=. read -r major minor patch <<< "${LATEST#v}"
           next="v${major}.${minor}.$((patch + 1))"
-          echo "Latest tag: $latest -> next: $next"
+          echo "Latest tag: $LATEST -> next: $next"
           echo "tag=$next" >> "$GITHUB_OUTPUT"
 
       - name: Tag and create GitHub release

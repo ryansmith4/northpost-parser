@@ -12,7 +12,11 @@ updates:
     groups:
       # Security updates to runtime dependencies (those shipped in the published artifact).
       # The CI auto-release job recognises this group by its branch name and cuts a
-      # patch release to Maven Central when one of these PRs is merged.
+      # patch release to Maven Central when one of these PRs is merged. The auto-merge
+      # workflow uses the same branch name to decide which runtime updates may merge
+      # themselves, so renaming the group breaks both. The build checks that every group
+      # in monitoredRuntimeGroups (build.gradle) has a pattern here; the comment there
+      # names every place to update.
       runtime-security:
         applies-to: security-updates
         patterns:

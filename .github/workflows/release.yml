@@ -10,9 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  # Publishes only for a release the repository owner published, or a run started by
+  # workflow dispatch (the CI auto-release job, or the owner retrying). Anything else
+  # that can create a release, such as the app that merges Dependabot pull requests,
+  # would otherwise reach the publishing and signing secrets by tagging a commit of its
+  # own; that app cannot dispatch workflows.
+  #
+  # This condition protects only commits that contain it. A release runs the copy of
+  # this workflow at the tagged commit, and commits older than this condition carry a
+  # copy without it. Closing that needs a repository setting, not a change here: keep
+  # the publishing secrets in an environment that only this job names, so an older copy
+  # of the workflow receives none of them.
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    if: github.event_name == 'workflow_dispatch' || github.actor == github.repository_owner
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
