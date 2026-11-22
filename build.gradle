@@ -44,6 +44,12 @@ dependencies {
     testRuntimeOnly libs.logback.classic
 }
 
+// Gradle's antlr plugin makes `api` extend the `antlr` configuration, so the grammar tool
+// (org.antlr:antlr4) and everything it needs (ANTLR 3, ST4, ICU4J, treelayout) would be
+// published as dependencies of this library. Consumers need only antlr4-runtime, declared
+// above, so the link is removed here. The tool still generates the parser at build time.
+configurations.api.setExtendsFrom(configurations.api.extendsFrom.findAll { it.name != 'antlr' })
+
 // Libraries that reach consumers through this library are handled differently from build
 // and test tooling: Dependabot's ordinary updates to them wait for a manual merge, and its
 // security updates to them open an issue asking for a release. The automation keeps its
@@ -87,6 +93,12 @@ tasks.register('checkRuntimeDependencies') {
                 "  Add each group to monitoredRuntimeGroups in build.gradle, to the labelling step in " +
                 ".github/workflows/dependabot-auto-merge.yml and to the runtime-security group in .github/dependabot.yml.\n" +
                 "  If consumers should not receive a dependency, change its scope instead."
+        }
+        // The grammar tool is in a monitored group, so the test above lets it through. It must
+        // not be published at all: see the note under the dependencies block.
+        if (published.get().contains('org.antlr:antlr4')) {
+            problems << "The ANTLR tool (org.antlr:antlr4) is among the published dependencies. Only " +
+                "antlr4-runtime should be: check that `api` no longer extends the `antlr` configuration."
         }
         def dependabotText = dependabotConfig.asFile.text
         def autoMergeText = autoMergeWorkflow.asFile.text
