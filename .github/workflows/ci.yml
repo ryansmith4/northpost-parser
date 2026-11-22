@@ -272,3 +272,84 @@ jobs:
           new_issue --label release-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
             || new_issue --assignee "$GITHUB_REPOSITORY_OWNER" \
             || new_issue
+
+  # Tells the repository owner when a run they did not start has failed. GitHub emails a
+  # failed run only to whoever started it, so a run started by Dependabot, or by the app
+  # that merges its pull requests, reaches nobody: a pull request with auto-merge enabled
+  # would sit open, or main would stay broken. The owner's own runs are left to GitHub's
+  # email.
+  #
+  # A pull request from a fork is skipped: its token cannot open an issue, and the owner
+  # reviews those by hand anyway. A cancelled job is not reported, because a newer push
+  # to a pull request cancels the older run on purpose.
+  report-failure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [ build, dependency-submission, dependency-review ]
+    if: >-
+      always() &&
+      contains(needs.*.result, 'failure') &&
+      github.actor != github.repository_owner &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          SUBMISSION_RESULT: ${{ needs['dependency-submission'].result }}
+          REVIEW_RESULT: ${{ needs['dependency-review'].result }}
+        run: |
+          case "$EVENT" in
+            pull_request)
+              title="CI failed on pull request #$PR_NUMBER: $PR_TITLE"
+              next="If the pull request has auto-merge enabled, it merges by itself once its checks pass."
+              ;;
+            push)
+              title="CI failed on main after: ${COMMIT_MSG%%$'\n'*}"
+              next="Until a run on main passes, the next pull requests have no dependency baseline to be compared against."
+              ;;
+            *)
+              title="CI failed on $GITHUB_REF_NAME"
+              next="This run was started by another workflow, such as the README update that follows a release."
+              ;;
+          esac
+          body=$(cat <<BODY
+          A CI run started by \`$GITHUB_ACTOR\` failed. GitHub emails a failed run only to whoever
+          started it, so this issue is the notice.
+
+          | Job | Result |
+          |---|---|
+          | Java 21 and Java 25 | $BUILD_RESULT |
+          | dependency-submission | $SUBMISSION_RESULT |
+          | dependency-review | $REVIEW_RESULT |
+
+          Run: $RUN_URL
+
+          If the log shows a download that failed (a dependency or plugin that could not be found
+          or resolved), run the failed jobs again:
+          \`gh run rerun $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY --failed\`
+
+          $next
+          BODY
+          )
+          gh label create ci-failure --repo "$GITHUB_REPOSITORY" --force \
+            --color B60205 --description "A CI run nobody was emailed about has failed" \
+            || echo "::warning::Could not create the ci-failure label."
+
+          # Try the labelled, assigned issue first, then drop the label, then the assignee:
+          # each step down has fewer ways to fail.
+          new_issue() {
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body" "$@"
+          }
+          new_issue --label ci-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
+            || new_issue --assignee "$GITHUB_REPOSITORY_OWNER" \
+            || new_issue

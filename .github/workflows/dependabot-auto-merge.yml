@@ -154,3 +154,26 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      # GitHub emails a failed run only to whoever started it, and Dependabot started this
+      # one. A comment that mentions the repository owner reaches them instead. It is
+      # posted with the built-in token, never the app's.
+      - name: Tell the owner the job failed
+        if: failure()
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body=$(cat <<BODY
+          @$GITHUB_REPOSITORY_OWNER the auto-merge job failed for this pull request, so it may not
+          merge by itself.
+
+          Run: $RUN_URL
+
+          If the cause looks temporary, run the job again:
+          \`gh run rerun $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY --failed\`
+          Otherwise merge the pull request by hand if the update is wanted.
+          BODY
+          )
+          gh pr comment "$PR_URL" --body "$body"
