@@ -64,9 +64,10 @@ configurations.api.setExtendsFrom(configurations.api.extendsFrom.findAll { it.na
 // shippedLibraries, when a library in that list is no longer published, or when the group of
 // a listed library is missing from either file.
 //
-// It has two limits. It sees the dependencies this build declares, not what those pull in.
-// And it searches the text of the two files, so it catches a file that was forgotten, not a
-// pattern put in the wrong part of one.
+// It has three limits. It sees the dependencies this build declares, not what those pull in.
+// It does not see a dependency on another project of this build; there is none today. And it
+// searches the text of the two files, so it catches a file that was forgotten, not a pattern
+// put in the wrong part of one.
 def shippedLibraries = ['org.antlr:antlr4-runtime', 'org.slf4j:slf4j-api']
 def monitoredRuntimeGroups = shippedLibraries.collect { it.split(':')[0] }.unique()
 
@@ -107,7 +108,8 @@ tasks.register('checkRuntimeDependencies') {
         def notPublished = shipped.findAll { !published.get().contains(it) }
         if (!notPublished.isEmpty()) {
             problems << "shippedLibraries in build.gradle lists dependencies this build does not publish: " +
-                "${notPublished.join(', ')}. Remove them from the list."
+                "${notPublished.join(', ')}. Remove them from the list, or restore the dependency if " +
+                "consumers should still receive it."
         }
         def dependabotText = dependabotConfig.asFile.text
         def autoMergeText = autoMergeWorkflow.asFile.text
