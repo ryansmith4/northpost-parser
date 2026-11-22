@@ -263,10 +263,12 @@ jobs:
             --color B60205 --description "An automated release workflow failed" \
             || echo "::warning::Could not create the release-failure label."
 
-          # Try the labelled, assigned issue first, then a bare one, which has the fewest
-          # ways to fail.
+          # Try the labelled, assigned issue first, then drop the label, then the assignee:
+          # each step down has fewer ways to fail.
           new_issue() {
             gh issue create --repo "$GITHUB_REPOSITORY" \
               --title "Release reminder failed after: $subject" --body "$body" "$@"
           }
-          new_issue --label release-failure --assignee "$GITHUB_REPOSITORY_OWNER" || new_issue
+          new_issue --label release-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
+            || new_issue --assignee "$GITHUB_REPOSITORY_OWNER" \
+            || new_issue

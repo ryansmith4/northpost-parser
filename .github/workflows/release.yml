@@ -15,15 +15,18 @@ jobs:
   # that merges Dependabot pull requests, would otherwise reach the publishing and
   # signing secrets by tagging a commit of its own.
   #
-  # This condition protects only commits that contain it. A release runs the copy of
-  # this workflow at the tagged commit, and commits older than this condition carry a
-  # copy without it. Closing that needs a repository setting as well as one line here:
-  # move the publishing secrets into an environment and name it on this job, so an older
-  # copy of the workflow receives none of them.
+  # That condition protects only commits that contain it. A release runs the copy of
+  # this workflow at the tagged commit, and commits older than the condition carry a
+  # copy without it. The environment covers those. The publishing and signing secrets
+  # are stored in the maven-central environment and nowhere else, so only a job that
+  # names it receives them, and an older copy of this workflow names none. The
+  # environment also makes each run wait for the repository owner's approval. Both are
+  # repository settings (Settings > Environments), not something this file can enforce.
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     if: github.actor == github.repository_owner
+    environment: maven-central
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,12 +143,12 @@ jobs:
           PUBLISH_RESULT: ${{ needs.publish.result }}
           README_RESULT: ${{ needs['update-readme'].result }}
         run: |
-          gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
-            --color B60205 --description "An automated release workflow failed"
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Release $GITHUB_REF_NAME failed" \
-            --label release-failure \
-            --body "$(cat <<BODY
+          if [ "$PUBLISH_RESULT" = skipped ]; then
+            title="Release $GITHUB_REF_NAME was not published"
+          else
+            title="Release $GITHUB_REF_NAME failed"
+          fi
+          body=$(cat <<BODY
           The release workflow for \`$GITHUB_REF_NAME\` did not complete.
 
           | Job | Result |
@@ -169,5 +172,18 @@ jobs:
           \`sed\` patterns in \`release.yml\`.
 
           To retry: \`gh workflow run release.yml --ref $GITHUB_REF_NAME\`
+          Retry only if you want this version on Maven Central. Publishing cannot be undone.
           BODY
-          )"
+          )
+          gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
+            --color B60205 --description "An automated release workflow failed" \
+            || echo "::warning::Could not create the release-failure label."
+
+          # Try the labelled, assigned issue first, then drop the label, then the assignee:
+          # each step down has fewer ways to fail.
+          new_issue() {
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body" "$@"
+          }
+          new_issue --label release-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
+            || new_issue --assignee "$GITHUB_REPOSITORY_OWNER" \
+            || new_issue
