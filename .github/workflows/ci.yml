@@ -110,7 +110,9 @@ jobs:
   # ships in the published artifact) merges like any other update, and nothing is
   # released automatically. Until someone publishes a release, Maven Central still serves
   # the vulnerable version, so this job opens an issue assigned to the repository owner,
-  # which GitHub emails to them.
+  # which GitHub emails to them. If that issue is still open when another such update
+  # merges, the job adds a comment to it instead of opening a second one: one release
+  # covers them all.
   #
   # These updates are recognised by the "runtime-security" Dependabot group (see
   # .github/dependabot.yml), whose branches are named
@@ -168,13 +170,7 @@ jobs:
             *) since="The last release could not be looked up, so compare main with the latest release tag yourself." ;;
           esac
 
-          gh label create release-needed --repo "$GITHUB_REPOSITORY" --force \
-            --color D93F0B --description "A security fix is on main and needs a release by hand"
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Security fix needs a release: $subject" \
-            --label release-needed \
-            --assignee "$GITHUB_REPOSITORY_OWNER" \
-            --body "$(cat <<BODY
+          first_body=$(cat <<BODY
           A Dependabot security update to a library this project ships was merged in \`$GITHUB_SHA\`:
           $subject
 
@@ -185,9 +181,42 @@ jobs:
 
           Choose the version number under the README's Versioning section: a patch release if
           nothing else in the library has changed since the last release. Then publish a GitHub
-          release with a \`vX.Y.Z\` tag.
+          release with a \`vX.Y.Z\` tag and close this issue.
+
+          One release covers every fix listed here. A fix merged before then is added as a comment.
           BODY
-          )"
+          )
+          later_body=$(cat <<BODY
+          Another Dependabot security update to a shipped library was merged in \`$GITHUB_SHA\`:
+          $subject
+
+          No release has been published since this issue was opened. One release covers every
+          fix listed here.
+
+          $since
+          BODY
+          )
+
+          gh label create release-needed --repo "$GITHUB_REPOSITORY" --force \
+            --color D93F0B --description "A security fix is on main and needs a release by hand"
+
+          # One open issue collects every fix that is waiting, because one release publishes
+          # them all. A later fix becomes a comment on it, which GitHub also emails. If the
+          # lookup fails, open a new issue: a duplicate is better than no reminder.
+          open_issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label release-needed --state open \
+            --json number --jq '.[0].number // empty') || open_issue=""
+          case "$open_issue" in
+            ''|*[!0-9]*)
+              gh issue create --repo "$GITHUB_REPOSITORY" \
+                --title "Security fix on main needs a release" \
+                --label release-needed \
+                --assignee "$GITHUB_REPOSITORY_OWNER" \
+                --body "$first_body"
+              ;;
+            *)
+              gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body "$later_body"
+              ;;
+          esac
 
       # GitHub emails a failed run only to whoever started it, and a bot started this one.
       # Leave an issue instead, so a lost reminder is not missed.
