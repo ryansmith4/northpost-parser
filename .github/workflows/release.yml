@@ -17,9 +17,9 @@ jobs:
   #
   # This condition protects only commits that contain it. A release runs the copy of
   # this workflow at the tagged commit, and commits older than this condition carry a
-  # copy without it. Closing that needs a repository setting, not a change here: keep
-  # the publishing secrets in an environment that only this job names, so an older copy
-  # of the workflow receives none of them.
+  # copy without it. Closing that needs a repository setting as well as one line here:
+  # move the publishing secrets into an environment and name it on this job, so an older
+  # copy of the workflow receives none of them.
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -122,12 +122,13 @@ jobs:
           gh pr merge --auto --squash "$PR_NUMBER"
 
   # Open an issue so a failed publish or README update is not missed, with the steps
-  # to check and retry.
+  # to check and retry. A skipped publish is reported too: it means someone other than
+  # the repository owner published the release, and nothing else would say so.
   report-failure:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [ publish, update-readme ]
-    if: always() && contains(needs.*.result, 'failure')
+    if: always() && (contains(needs.*.result, 'failure') || needs.publish.result == 'skipped')
     permissions:
       issues: write
 
@@ -153,6 +154,10 @@ jobs:
           | update-readme | $README_RESULT |
 
           Run: $RUN_URL
+
+          If \`publish\` was skipped, the release was not published by the repository owner, and
+          only the owner's releases go to Maven Central. If you did not expect this release, find
+          out who created it.
 
           If \`publish\` failed, check whether the version reached Maven Central before re-running:
           https://repo1.maven.org/maven2/com/guidedbyte/northpost-parser/

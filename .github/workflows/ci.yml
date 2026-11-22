@@ -109,15 +109,15 @@ jobs:
   # Release reminder. A Dependabot *security* update to a runtime dependency (one that
   # ships in the published artifact) merges like any other update, and nothing is
   # released automatically. Until someone publishes a release, Maven Central still serves
-  # the vulnerable version, so this job opens an issue assigned to the repository owner,
-  # which GitHub emails to them. If that issue is still open when another such update
-  # merges, the job adds a comment to it instead of opening a second one: one release
-  # covers them all.
+  # the vulnerable version, so this job opens an issue assigned to the repository owner.
+  # GitHub notifies an assignee, by email if their notification settings say so. If that
+  # issue is still open when another such update merges, the job adds a comment to it
+  # instead of opening a second one: one release covers them all.
   #
   # These updates are recognised by the "runtime-security" Dependabot group (see
-  # .github/dependabot.yml), whose branches are named
-  # dependabot/gradle/runtime-security-<hash>. A security fix that reaches main on any
-  # other branch gets no reminder.
+  # .github/dependabot.yml). Dependabot names a group's branch after the group, so these
+  # should be dependabot/gradle/runtime-security-<hash>; none has occurred here yet. A
+  # security fix that reaches main on any other branch gets no reminder.
   #
   # The job does not wait for the build: the reminder is wanted even when the build on
   # main fails.
@@ -138,8 +138,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pr_head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.ref // ""')
-          echo "Merged PR branch: ${pr_head:-<none>}"
+          # This job runs only for a commit Dependabot wrote, and such a commit reaches main
+          # only through a pull request. GitHub can take a moment to link the two after a
+          # merge, so an empty answer is retried and then treated as a failure. Ending
+          # quietly here could lose a reminder.
+          pr_head=""
+          for attempt in 1 2 3 4 5 6; do
+            pr_head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.ref // ""') || pr_head=""
+            if [ -n "$pr_head" ]; then break; fi
+            echo "No pull request found for this commit yet (attempt $attempt of 6)."
+            sleep 10
+          done
+          if [ -z "$pr_head" ]; then
+            echo "::error::No pull request was found for commit $GITHUB_SHA, so it could not be checked."
+            exit 1
+          fi
+          echo "Merged PR branch: $pr_head"
 
           case "$pr_head" in
             dependabot/gradle/runtime-security-*)
@@ -179,9 +193,10 @@ jobs:
 
           $since
 
-          Choose the version number under the README's Versioning section: a patch release if
-          nothing else in the library has changed since the last release. Then publish a GitHub
-          release with a \`vX.Y.Z\` tag and close this issue.
+          Choose the version number under the README's Versioning section: a patch release, unless
+          the fix is a new major version of the dependency or other changes since the last release
+          need a higher number. Then publish a GitHub release with a \`vX.Y.Z\` tag and close this
+          issue.
 
           One release covers every fix listed here. A fix merged before then is added as a comment.
           BODY
@@ -190,28 +205,35 @@ jobs:
           Another Dependabot security update to a shipped library was merged in \`$GITHUB_SHA\`:
           $subject
 
-          No release has been published since this issue was opened. One release covers every
-          fix listed here.
+          This reminder is still open, so the fix is added to it. One release covers every fix
+          listed here.
 
           $since
           BODY
           )
 
+          # The label is how the search below finds an open reminder. Failing to create it
+          # must not stop the reminder itself.
           gh label create release-needed --repo "$GITHUB_REPOSITORY" --force \
-            --color D93F0B --description "A security fix is on main and needs a release by hand"
+            --color D93F0B --description "A security fix is on main and needs a release by hand" \
+            || echo "::warning::Could not create the release-needed label."
+
+          new_issue() {
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Security fix on main needs a release" \
+              --assignee "$GITHUB_REPOSITORY_OWNER" \
+              --body "$first_body" "$@"
+          }
 
           # One open issue collects every fix that is waiting, because one release publishes
-          # them all. A later fix becomes a comment on it, which GitHub also emails. If the
-          # lookup fails, open a new issue: a duplicate is better than no reminder.
+          # them all. A later fix becomes a comment on it, which notifies the assignee the
+          # same way. If the search fails, or the issue cannot be labelled, open one anyway:
+          # a duplicate is better than no reminder.
           open_issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label release-needed --state open \
             --json number --jq '.[0].number // empty') || open_issue=""
           case "$open_issue" in
             ''|*[!0-9]*)
-              gh issue create --repo "$GITHUB_REPOSITORY" \
-                --title "Security fix on main needs a release" \
-                --label release-needed \
-                --assignee "$GITHUB_REPOSITORY_OWNER" \
-                --body "$first_body"
+              new_issue --label release-needed || new_issue
               ;;
             *)
               gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body "$later_body"
@@ -228,12 +250,7 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           subject=${COMMIT_MSG%%$'\n'*}
-          gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
-            --color B60205 --description "An automated release workflow failed"
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Release reminder failed after: $subject" \
-            --label release-failure \
-            --body "$(cat <<BODY
+          body=$(cat <<BODY
           The CI \`release-reminder\` job failed on commit \`$GITHUB_SHA\`.
 
           Run: $RUN_URL
@@ -241,4 +258,15 @@ jobs:
           Check whether that commit is a Dependabot security update to a shipped library
           (\`antlr4-runtime\` or \`slf4j-api\`). If it is, the fix needs a release.
           BODY
-          )"
+          )
+          gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
+            --color B60205 --description "An automated release workflow failed" \
+            || echo "::warning::Could not create the release-failure label."
+
+          # Try the labelled, assigned issue first, then a bare one, which has the fewest
+          # ways to fail.
+          new_issue() {
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Release reminder failed after: $subject" --body "$body" "$@"
+          }
+          new_issue --label release-failure --assignee "$GITHUB_REPOSITORY_OWNER" || new_issue

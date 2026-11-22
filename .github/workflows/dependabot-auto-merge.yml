@@ -69,16 +69,16 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
           gh pr edit "$PR_URL" --add-label "$label"
 
-      # A pull request merges itself only when every update in it is a minor or patch
-      # update. Two kinds of those still wait for a person:
+      # A pull request merges itself only when every update in it is known to be a minor
+      # or patch update. One with a major update, or with an update of unknown size,
+      # waits for a person. Dependabot does not always state the size, and the metadata
+      # action then works it out from the version numbers in the commit message. The
+      # action's own summary (update-type) ignores an update it could not size, so this
+      # step reads the full list instead.
       #
-      # - A pull request where the size of any one update is unknown. Dependabot does not
-      #   always state the size, and the metadata action then works it out from the
-      #   version numbers in the commit message. The action's own summary (update-type)
-      #   ignores an update it could not size, so this step reads the full list instead.
-      # - An ordinary update to a library shipped in the artifact. Consumers get that
-      #   version through this library, and the tests here cannot see a conflict it
-      #   causes in someone else's application.
+      # One kind of minor or patch update also waits: an ordinary update to a library
+      # shipped in the artifact. Consumers get that version through this library, and the
+      # tests here cannot see a conflict it causes in someone else's application.
       #
       # A security update to a shipped library still merges itself, so the fix reaches
       # main quickly; the release-reminder job in ci.yml then asks for a release. It is
@@ -110,15 +110,16 @@ jobs:
           merge=false
           case "$size" in
             minor-or-patch)
-              if [ "$LABEL" = "runtime-dependency" ]; then
-                case "$BRANCH" in
-                  dependabot/gradle/runtime-security-*) merge=true; reason="security update to a shipped library" ;;
-                  *) reason="ordinary update to a shipped library" ;;
-                esac
-              else
-                merge=true
-                reason="minor or patch update to tooling"
-              fi
+              case "$LABEL" in
+                tooling) merge=true; reason="minor or patch update to tooling" ;;
+                runtime-dependency)
+                  case "$BRANCH" in
+                    dependabot/gradle/runtime-security-*) merge=true; reason="security update to a shipped library" ;;
+                    *) reason="ordinary update to a shipped library" ;;
+                  esac
+                  ;;
+                *) reason="the labelling step did not sort this update" ;;
+              esac
               ;;
             major) reason="major version update" ;;
             *) reason="the size of at least one update is unknown" ;;

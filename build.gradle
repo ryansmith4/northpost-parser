@@ -54,14 +54,19 @@ dependencies {
 //
 // The check below fails the build when a published dependency has a group that is not in
 // monitoredRuntimeGroups, or when a group in that list is missing from either file.
+//
+// It has two limits. It sees the dependencies this build declares, not what those pull in.
+// And it searches the text of the two files, so it catches a file that was forgotten, not a
+// pattern put in the wrong part of one.
 def monitoredRuntimeGroups = ['org.antlr', 'org.slf4j']
 
 tasks.register('checkRuntimeDependencies') {
     group = 'verification'
-    description = 'Fails if a library that reaches consumers is not in the lists the Dependabot automation monitors.'
+    description = 'Fails if a dependency this build publishes is not in the lists the Dependabot automation monitors.'
 
     // apiElements and runtimeElements are what the published POM and module metadata are built
-    // from. The provider is read when the task runs, so a dependency is seen wherever it was
+    // from today; a feature variant or test fixtures would publish more. The provider is read
+    // after the whole build script has been evaluated, so a dependency is seen wherever it was
     // declared.
     def groups = monitoredRuntimeGroups
     def published = provider {
