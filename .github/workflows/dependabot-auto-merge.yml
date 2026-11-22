@@ -26,6 +26,9 @@ jobs:
       # otherwise run the new version here, in the job that handles the app's private
       # key, before anyone has read it. Such an update waits for a person. It is always
       # an update to GitHub Actions, hence the tooling label.
+      #
+      # The one exception is the last step, which only reports a failed job. It uses
+      # neither an action nor the app's key.
       - name: Hold an update that changes this workflow
         id: guard
         env:

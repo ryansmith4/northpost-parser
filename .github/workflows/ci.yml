@@ -280,15 +280,20 @@ jobs:
   # email.
   #
   # A pull request from a fork is skipped: its token cannot open an issue, and the owner
-  # reviews those by hand anyway. A cancelled job is not reported, because a newer push
-  # to a pull request cancels the older run on purpose.
+  # reviews those by hand anyway.
+  #
+  # A cancelled job is reported only outside pull requests. There nothing cancels a run on
+  # purpose, so it means a job ran past its time limit or someone stopped the run. On a
+  # pull request a newer push cancels the older run, which is not worth a notice; a job
+  # that had already failed before that happened is still reported.
   report-failure:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [ build, dependency-submission, dependency-review ]
     if: >-
       always() &&
-      contains(needs.*.result, 'failure') &&
+      (contains(needs.*.result, 'failure') ||
+       (github.event_name != 'pull_request' && contains(needs.*.result, 'cancelled'))) &&
       github.actor != github.repository_owner &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
@@ -310,21 +315,35 @@ jobs:
         run: |
           case "$EVENT" in
             pull_request)
-              title="CI failed on pull request #$PR_NUMBER: $PR_TITLE"
-              next="If the pull request has auto-merge enabled, it merges by itself once its checks pass."
+              what="pull request #$PR_NUMBER: $PR_TITLE"
+              if [ "$BUILD_RESULT" = success ]; then
+                # Only the Java jobs are required checks, so this one does not hold the merge.
+                next="The required checks passed, so a pull request with auto-merge enabled merges without a dependency review. Check the dependency-review log and the update itself by hand."
+              else
+                next="If the pull request has auto-merge enabled, it merges by itself once its checks pass."
+              fi
               ;;
             push)
-              title="CI failed on main after: ${COMMIT_MSG%%$'\n'*}"
-              next="Until a run on main passes, the next pull requests have no dependency baseline to be compared against."
+              what="main after: ${COMMIT_MSG%%$'\n'*}"
+              if [ "$SUBMISSION_RESULT" = success ]; then
+                next="The dependency baseline for this commit was still recorded, so pull requests are not affected. What is not known is whether main builds."
+              else
+                next="Until dependency-submission passes on main, the next pull requests have no dependency baseline to be compared against."
+              fi
               ;;
             *)
-              title="CI failed on $GITHUB_REF_NAME"
+              what="$GITHUB_REF_NAME"
               next="This run was started by another workflow, such as the README update that follows a release."
               ;;
           esac
+          # GitHub refuses an issue title longer than 256 characters.
+          title="CI failed on $what"
+          title=${title:0:200}
           body=$(cat <<BODY
-          A CI run started by \`$GITHUB_ACTOR\` failed. GitHub emails a failed run only to whoever
-          started it, so this issue is the notice.
+          CI failed on $what
+
+          The run was started by \`$GITHUB_ACTOR\`. GitHub emails a failed run only to whoever
+          started it, so this is the notice.
 
           | Job | Result |
           |---|---|
@@ -339,8 +358,13 @@ jobs:
           \`gh run rerun $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY --failed\`
 
           $next
+
+          Close this issue once it is dealt with. Until then, later failures are added to it as
+          comments.
           BODY
           )
+          # The label is how the search below finds an open notice. Failing to create it must
+          # not stop the notice itself.
           gh label create ci-failure --repo "$GITHUB_REPOSITORY" --force \
             --color B60205 --description "A CI run nobody was emailed about has failed" \
             || echo "::warning::Could not create the ci-failure label."
@@ -350,6 +374,24 @@ jobs:
           new_issue() {
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body" "$@"
           }
-          new_issue --label ci-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
-            || new_issue --assignee "$GITHUB_REPOSITORY_OWNER" \
-            || new_issue
+          open_new_issue() {
+            new_issue --label ci-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
+              || new_issue --assignee "$GITHUB_REPOSITORY_OWNER" \
+              || new_issue
+          }
+
+          # One open issue collects the failures, so an outage at a package site does not
+          # open one issue per run. A later failure becomes a comment on it, which notifies
+          # the assignee the same way. If the search or the comment fails, open an issue
+          # anyway: a duplicate is better than no notice.
+          open_issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
+            --json number --jq '.[0].number // empty') || open_issue=""
+          case "$open_issue" in
+            ''|*[!0-9]*)
+              open_new_issue
+              ;;
+            *)
+              gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body "$body" \
+                || open_new_issue
+              ;;
+          esac
