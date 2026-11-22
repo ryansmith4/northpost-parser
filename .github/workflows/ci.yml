@@ -15,7 +15,7 @@ permissions:
 # A pull request keeps one run per branch and cancels the older one. Each push to main
 # gets a group of its own, so its run is never dropped. In a shared group only one run
 # can wait, and a newer one replaces it. Dependabot merges land seconds apart, so the
-# runs in the middle, and their auto-release jobs, would be lost.
+# runs in the middle, and their release-reminder jobs, would be lost.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -106,39 +106,31 @@ jobs:
           comment-summary-in-pr: on-failure
           retry-on-snapshot-warnings: true
 
-  # Security-only auto-release. When a Dependabot *security* update to a runtime
-  # dependency (one that ships in the published artifact) is merged, cut a patch release
-  # so the Maven Central artifact no longer carries the vulnerable dependency.
+  # Release reminder. A Dependabot *security* update to a runtime dependency (one that
+  # ships in the published artifact) merges like any other update, and nothing is
+  # released automatically. Until someone publishes a release, Maven Central still serves
+  # the vulnerable version, so this job opens an issue assigned to the repository owner,
+  # which GitHub emails to them.
   #
-  # Security PRs for runtime dependencies are identified by the "runtime-security"
-  # Dependabot group (see .github/dependabot.yml), whose branches are named
-  # dependabot/gradle/runtime-security-<hash>. Nothing else is released automatically:
-  # ordinary updates to runtime dependencies wait for a manual merge, and updates to
-  # test dependencies and build tooling are auto-merged without a release. A security
-  # fix that reaches main on any other branch is not released by this job.
+  # These updates are recognised by the "runtime-security" Dependabot group (see
+  # .github/dependabot.yml), whose branches are named
+  # dependabot/gradle/runtime-security-<hash>. A security fix that reaches main on any
+  # other branch gets no reminder.
   #
-  # The release is only automatic when a patch version number is honest. The job looks at
-  # everything on main since the last release tag, the fix included. If that holds changes
-  # to the library itself, or a shipped library has moved to a new major version, the job
-  # opens an issue asking for a release by hand instead.
-  auto-release:
+  # The job does not wait for the build: the reminder is wanted even when the build on
+  # main fails.
+  release-reminder:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: build
+    timeout-minutes: 5
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       github.event.head_commit.author.name == 'dependabot[bot]'
     permissions:
-      contents: write
-      actions: write
+      contents: read
       issues: write
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
       - name: Detect runtime security update
         id: detect
         env:
@@ -148,145 +140,76 @@ jobs:
           echo "Merged PR branch: ${pr_head:-<none>}"
 
           case "$pr_head" in
-            dependabot/gradle/runtime-security-*) ;;
+            dependabot/gradle/runtime-security-*)
+              echo "Runtime security update; opening a release reminder."
+              echo "remind=true" >> "$GITHUB_OUTPUT"
+              ;;
             *)
-              echo "Not a runtime security update; skipping release."
-              echo "release=false" >> "$GITHUB_OUTPUT"
-              exit 0
+              echo "Not a runtime security update; no reminder."
+              echo "remind=false" >> "$GITHUB_OUTPUT"
               ;;
           esac
 
-          if [ -n "$(git tag --points-at HEAD --list 'v*')" ]; then
-            echo "This commit already carries a release tag, so this is a re-run; skipping release."
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # From here on the commit is a security update to a shipped library. Release it
-          # automatically only if the next patch number describes it honestly. Every
-          # other outcome sets a reason, and the next step turns that into an issue.
-          held=""
-
-          # The last release is the nearest release tag in main's own history, so a tag
-          # on some other commit cannot change the next version number.
-          latest=$(git describe --tags --abbrev=0 --match 'v*' HEAD~1 2>/dev/null || true)
-
-          # Runtime dependencies are listed here by their key under [versions] in
-          # gradle/libs.versions.toml, not by group name. Nothing checks this list: when a
-          # runtime dependency is added, add its key here (see monitoredRuntimeGroups in
-          # build.gradle, which names every place to update).
-          if ! git diff HEAD~1 HEAD -- gradle/libs.versions.toml | grep -Eq '^[+-](antlr|slf4j) = '; then
-            held="The pull request came from the runtime-security group, but it changed neither antlr nor slf4j in gradle/libs.versions.toml. A newly shipped library is probably missing from the list in the auto-release job of ci.yml."
-          elif [ -z "$latest" ]; then
-            held="No release tag was found in the history of main to count the next version from."
-          else
-            unreleased=$(git diff "$latest" HEAD -- gradle/libs.versions.toml)
-            for key in antlr slf4j; do
-              old=$(printf '%s\n' "$unreleased" | sed -n "s/^-$key = \"\([0-9]*\).*/\1/p")
-              new=$(printf '%s\n' "$unreleased" | sed -n "s/^+$key = \"\([0-9]*\).*/\1/p")
-              if [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ]; then
-                held="Since $latest, $key has moved from major version $old to $new, which the versioning policy releases as at least a minor version."
-              fi
-            done
-            if [ -z "$held" ] && ! git diff --quiet "$latest" HEAD -- src/main build.gradle; then
-              held="main holds changes to the library itself (src/main or build.gradle) made since $latest and not yet released, so a patch release would publish them too."
-            fi
-          fi
-
-          if [ -n "$held" ]; then
-            echo "Not releasing automatically: $held"
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "held<<HELD_EOF"
-              echo "$held"
-              echo "HELD_EOF"
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "latest=$latest" >> "$GITHUB_OUTPUT"
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # The security fix is on main but was not published. Automated runs email nobody,
-      # so leave an issue.
-      - name: Ask for a manual release
-        if: steps.detect.outputs.held != ''
+      - name: Ask for a release
+        if: steps.detect.outputs.remind == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HELD: ${{ steps.detect.outputs.held }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
+          subject=${COMMIT_MSG%%$'\n'*}
+
+          # The last release, for a link to everything a new release would publish. The
+          # reminder is sent even when it cannot be found.
+          if ! latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null); then
+            latest=""
+          fi
+          case "$latest" in
+            v[0-9]*) since="Last release: \`$latest\`. Everything a new release would publish: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$latest...main" ;;
+            *) since="The last release could not be looked up, so compare main with the latest release tag yourself." ;;
+          esac
+
           gh label create release-needed --repo "$GITHUB_REPOSITORY" --force \
             --color D93F0B --description "A security fix is on main and needs a release by hand"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Security fix needs a manual release: ${COMMIT_MSG%%$'\n'*}" \
+            --title "Security fix needs a release: $subject" \
             --label release-needed \
+            --assignee "$GITHUB_REPOSITORY_OWNER" \
             --body "$(cat <<BODY
-          A Dependabot security update to a shipped library was merged in \`$GITHUB_SHA\`, but the
-          automatic patch release did not run.
+          A Dependabot security update to a library this project ships was merged in \`$GITHUB_SHA\`:
+          $subject
 
-          Reason: $HELD
+          The fix is on main, but Maven Central still serves the vulnerable version until a
+          release is published. Nothing is released automatically.
 
-          The fix is on main and is not on Maven Central until a release is published. Choose
-          the version number under the README's Versioning section and publish a GitHub release
-          with a \`vX.Y.Z\` tag.
+          $since
+
+          Choose the version number under the README's Versioning section: a patch release if
+          nothing else in the library has changed since the last release. Then publish a GitHub
+          release with a \`vX.Y.Z\` tag.
           BODY
           )"
 
-      - name: Compute next patch version
-        if: steps.detect.outputs.release == 'true'
-        id: version
-        env:
-          LATEST: ${{ steps.detect.outputs.latest }}
-        run: |
-          IFS=. read -r major minor patch <<< "${LATEST#v}"
-          next="v${major}.${minor}.$((patch + 1))"
-          echo "Latest tag: $LATEST -> next: $next"
-          echo "tag=$next" >> "$GITHUB_OUTPUT"
-
-      - name: Tag and create GitHub release
-        if: steps.detect.outputs.release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
-        run: |
-          git tag "$TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "Automated security patch release: ${COMMIT_MSG%%$'\n'*}" \
-            --generate-notes
-
-      - name: Publish to Maven Central
-        if: steps.detect.outputs.release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-        # A release created with GITHUB_TOKEN does not fire the `release` event,
-        # so start the release workflow explicitly at the new tag.
-        run: gh workflow run release.yml --ref "$TAG"
-
-      # Automated runs are not emailed to anyone on failure; leave an issue instead.
+      # GitHub emails a failed run only to whoever started it, and a bot started this one.
+      # Leave an issue instead, so a lost reminder is not missed.
       - name: Open issue on failure
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
-          TAG: ${{ steps.version.outputs.tag }}
         run: |
+          subject=${COMMIT_MSG%%$'\n'*}
           gh label create release-failure --repo "$GITHUB_REPOSITORY" --force \
             --color B60205 --description "An automated release workflow failed"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Automated security release failed after: ${COMMIT_MSG%%$'\n'*}" \
+            --title "Release reminder failed after: $subject" \
             --label release-failure \
             --body "$(cat <<BODY
-          The CI \`auto-release\` job failed on commit \`$GITHUB_SHA\`.
+          The CI \`release-reminder\` job failed on commit \`$GITHUB_SHA\`.
 
-          Intended tag: \`${TAG:-not computed}\`
           Run: $RUN_URL
 
-          Check whether the tag and GitHub release were created before retrying. If the tag
-          exists but nothing was published, run: \`gh workflow run release.yml --ref $TAG\`
+          Check whether that commit is a Dependabot security update to a shipped library
+          (\`antlr4-runtime\` or \`slf4j-api\`). If it is, the fix needs a release.
           BODY
           )"

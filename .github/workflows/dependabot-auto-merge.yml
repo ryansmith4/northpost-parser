@@ -80,9 +80,10 @@ jobs:
       #   version through this library, and the tests here cannot see a conflict it
       #   causes in someone else's application.
       #
-      # A security update to a shipped library still merges itself, so the fix is
-      # released quickly. It is recognised by the branch name of the runtime-security
-      # group in .github/dependabot.yml, the same test the auto-release job in ci.yml uses.
+      # A security update to a shipped library still merges itself, so the fix reaches
+      # main quickly; the release-reminder job in ci.yml then asks for a release. It is
+      # recognised by the branch name of the runtime-security group in
+      # .github/dependabot.yml, the same test that job uses.
       - name: Decide whether to merge automatically
         if: steps.guard.outputs.hold == 'false'
         id: decide
@@ -128,7 +129,7 @@ jobs:
       # The merge is made as a GitHub App, not with GITHUB_TOKEN. GitHub starts no
       # workflow for a push made with GITHUB_TOKEN, so a merge made that way would not
       # run CI on main: main would get no dependency snapshot for the next pull request
-      # to be compared against, and the auto-release job in ci.yml would never run.
+      # to be compared against, and the release-reminder job in ci.yml would never run.
       #
       # The app is installed on this repository only, with Contents and Pull requests
       # set to read and write. Its client ID and private key are stored as Dependabot

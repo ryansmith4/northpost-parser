@@ -1,5 +1,5 @@
 # Groups the release notes that GitHub generates (the "Generate release notes" button, or
-# `gh release create --generate-notes` in the CI auto-release job) by pull-request label.
+# `gh release create --generate-notes`) by pull-request label.
 # A pull request lands in the first category whose label it carries. Unlabelled pull
 # requests fall into "Other Changes", so label a PR before merging if it belongs elsewhere.
 #

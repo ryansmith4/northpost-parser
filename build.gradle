@@ -46,17 +46,14 @@ dependencies {
 
 // Libraries that reach consumers through this library are handled differently from build
 // and test tooling: Dependabot's ordinary updates to them wait for a manual merge, and its
-// security updates to them trigger a patch release. The automation keeps its own list of
-// them in three other files:
+// security updates to them open an issue asking for a release. The automation keeps its
+// own list of them in two other files:
 //
-//   .github/workflows/dependabot-auto-merge.yml  the labelling step, by group name
-//   .github/dependabot.yml                       the runtime-security group, by group name
-//   .github/workflows/ci.yml                     the auto-release job, by the dependency's key
-//                                                under [versions] in gradle/libs.versions.toml
+//   .github/workflows/dependabot-auto-merge.yml  the labelling step
+//   .github/dependabot.yml                       the runtime-security group
 //
 // The check below fails the build when a published dependency has a group that is not in
-// monitoredRuntimeGroups, or when a group in that list is missing from the first two files.
-// It cannot check ci.yml, which uses version catalog keys: update that one by hand.
+// monitoredRuntimeGroups, or when a group in that list is missing from either file.
 def monitoredRuntimeGroups = ['org.antlr', 'org.slf4j']
 
 tasks.register('checkRuntimeDependencies') {
@@ -84,8 +81,6 @@ tasks.register('checkRuntimeDependencies') {
                 "does not treat them as shipped: ${unmonitored.join(', ')}.\n" +
                 "  Add each group to monitoredRuntimeGroups in build.gradle, to the labelling step in " +
                 ".github/workflows/dependabot-auto-merge.yml and to the runtime-security group in .github/dependabot.yml.\n" +
-                "  Add each dependency's key under [versions] in gradle/libs.versions.toml to the auto-release job in " +
-                ".github/workflows/ci.yml.\n" +
                 "  If consumers should not receive a dependency, change its scope instead."
         }
         def dependabotText = dependabotConfig.asFile.text
