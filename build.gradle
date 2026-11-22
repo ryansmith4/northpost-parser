@@ -52,28 +52,33 @@ configurations.api.setExtendsFrom(configurations.api.extendsFrom.findAll { it.na
 
 // Libraries that reach consumers through this library are handled differently from build
 // and test tooling: Dependabot's ordinary updates to them wait for a manual merge, and its
-// security updates to them open an issue asking for a release. The automation keeps its
-// own list of them in two other files:
+// security updates to them open an issue asking for a release.
+//
+// shippedLibraries is the exact list of those libraries. The automation recognises them by
+// group, in two other files:
 //
 //   .github/workflows/dependabot-auto-merge.yml  the labelling step
 //   .github/dependabot.yml                       the runtime-security group
 //
-// The check below fails the build when a published dependency has a group that is not in
-// monitoredRuntimeGroups, or when a group in that list is missing from either file.
+// The check below fails the build when this build would publish a dependency that is not in
+// shippedLibraries, when a library in that list is no longer published, or when the group of
+// a listed library is missing from either file.
 //
 // It has two limits. It sees the dependencies this build declares, not what those pull in.
 // And it searches the text of the two files, so it catches a file that was forgotten, not a
 // pattern put in the wrong part of one.
-def monitoredRuntimeGroups = ['org.antlr', 'org.slf4j']
+def shippedLibraries = ['org.antlr:antlr4-runtime', 'org.slf4j:slf4j-api']
+def monitoredRuntimeGroups = shippedLibraries.collect { it.split(':')[0] }.unique()
 
 tasks.register('checkRuntimeDependencies') {
     group = 'verification'
-    description = 'Fails if a dependency this build publishes is not in the lists the Dependabot automation monitors.'
+    description = 'Fails if the dependencies this build publishes differ from shippedLibraries, or if the Dependabot automation does not monitor their groups.'
 
     // apiElements and runtimeElements are what the published POM and module metadata are built
     // from today; a feature variant or test fixtures would publish more. The provider is read
     // after the whole build script has been evaluated, so a dependency is seen wherever it was
     // declared.
+    def shipped = shippedLibraries
     def groups = monitoredRuntimeGroups
     def published = provider {
         [configurations.apiElements, configurations.runtimeElements].collectMany { conf ->
@@ -86,19 +91,23 @@ tasks.register('checkRuntimeDependencies') {
 
     doLast {
         def problems = []
-        def unmonitored = published.get().findAll { coords -> !groups.any { coords.startsWith(it) } }
-        if (!unmonitored.isEmpty()) {
-            problems << "Consumers receive these dependencies through this library, but the Dependabot automation " +
-                "does not treat them as shipped: ${unmonitored.join(', ')}.\n" +
-                "  Add each group to monitoredRuntimeGroups in build.gradle, to the labelling step in " +
-                ".github/workflows/dependabot-auto-merge.yml and to the runtime-security group in .github/dependabot.yml.\n" +
-                "  If consumers should not receive a dependency, change its scope instead."
+        def unexpected = published.get().findAll { !shipped.contains(it) }
+        if (!unexpected.isEmpty()) {
+            problems << "This build would publish dependencies that are not in shippedLibraries in build.gradle: " +
+                "${unexpected.join(', ')}.\n" +
+                "  If consumers should receive one, add it to shippedLibraries. The build then checks that its " +
+                "group is in .github/workflows/dependabot-auto-merge.yml and .github/dependabot.yml.\n" +
+                "  If consumers should not receive it, change its scope instead."
         }
-        // The grammar tool is in a monitored group, so the test above lets it through. It must
-        // not be published at all: see the note under the dependencies block.
-        if (published.get().contains('org.antlr:antlr4')) {
-            problems << "The ANTLR tool (org.antlr:antlr4) is among the published dependencies. Only " +
-                "antlr4-runtime should be: check that `api` no longer extends the `antlr` configuration."
+        if (unexpected.contains('org.antlr:antlr4')) {
+            problems << "org.antlr:antlr4 is the ANTLR grammar tool, which consumers do not need. Either the " +
+                "line under the dependencies block that stops `api` extending `antlr` is gone, or the tool is " +
+                "declared in a published configuration."
+        }
+        def notPublished = shipped.findAll { !published.get().contains(it) }
+        if (!notPublished.isEmpty()) {
+            problems << "shippedLibraries in build.gradle lists dependencies this build does not publish: " +
+                "${notPublished.join(', ')}. Remove them from the list."
         }
         def dependabotText = dependabotConfig.asFile.text
         def autoMergeText = autoMergeWorkflow.asFile.text
@@ -117,12 +126,14 @@ tasks.register('checkRuntimeDependencies') {
 }
 check.dependsOn 'checkRuntimeDependencies'
 
-// ANTLR configuration
+// ANTLR configuration. The generated sources go to build/generated-src/antlr/main, the
+// plugin's default, in the folder for packageName. Setting an output directory that also
+// names the package would nest that folder inside itself and put each generated file in
+// the sources jar twice.
 generateGrammarSource {
     maxHeapSize = "64m"
     arguments += ["-visitor", "-long-messages"]
     packageName = "com.guidedbyte.address.parser"
-    outputDirectory = layout.buildDirectory.dir("generated-src/antlr/main/com/guidedbyte/address/parser").get().asFile
 }
 
 compileJava.dependsOn generateGrammarSource
