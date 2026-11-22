@@ -284,8 +284,9 @@ jobs:
   #
   # A cancelled job is reported only outside pull requests. There nothing cancels a run on
   # purpose, so it means a job ran past its time limit or someone stopped the run. On a
-  # pull request a newer push cancels the older run, which is not worth a notice; a job
-  # that had already failed before that happened is still reported.
+  # pull request a newer push cancels the older run, which is not worth a notice. Two
+  # consequences on pull requests: a job that runs past its time limit is not reported,
+  # and a job that had already failed before the run was replaced still is.
   report-failure:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -317,8 +318,9 @@ jobs:
             pull_request)
               what="pull request #$PR_NUMBER: $PR_TITLE"
               if [ "$BUILD_RESULT" = success ]; then
-                # Only the Java jobs are required checks, so this one does not hold the merge.
-                next="The required checks passed, so a pull request with auto-merge enabled merges without a dependency review. Check the dependency-review log and the update itself by hand."
+                # The Java jobs passed, so the failure is in dependency-review, which does
+                # not hold a merge unless it has been made a required check.
+                next="The Java checks passed, and dependency-review does not hold a merge unless it has been made a required check. So a pull request with auto-merge enabled merges anyway and has probably merged already. Read the dependency-review log: if it found a vulnerable dependency, that dependency is now on main."
               else
                 next="If the pull request has auto-merge enabled, it merges by itself once its checks pass."
               fi
@@ -326,7 +328,7 @@ jobs:
             push)
               what="main after: ${COMMIT_MSG%%$'\n'*}"
               if [ "$SUBMISSION_RESULT" = success ]; then
-                next="The dependency baseline for this commit was still recorded, so pull requests are not affected. What is not known is whether main builds."
+                next="The dependency baseline for this commit was still recorded. If the cause was not a failed download, main itself is broken and every pull request will fail the same way."
               else
                 next="Until dependency-submission passes on main, the next pull requests have no dependency baseline to be compared against."
               fi
@@ -336,9 +338,9 @@ jobs:
               next="This run was started by another workflow, such as the README update that follows a release."
               ;;
           esac
-          # GitHub refuses an issue title longer than 256 characters.
-          title="CI failed on $what"
-          title=${title:0:200}
+          case "$BUILD_RESULT $SUBMISSION_RESULT $REVIEW_RESULT" in
+            *cancelled*) next="$next A job shown as cancelled most likely ran past its time limit. If the command above does not start it again, leave out --failed to run everything again." ;;
+          esac
           body=$(cat <<BODY
           CI failed on $what
 
@@ -370,9 +372,11 @@ jobs:
             || echo "::warning::Could not create the ci-failure label."
 
           # Try the labelled, assigned issue first, then drop the label, then the assignee:
-          # each step down has fewer ways to fail.
+          # each step down has fewer ways to fail. The title is the same for every failure,
+          # because one issue collects them and each failure names itself in its first line.
           new_issue() {
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body" "$@"
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "CI failed in a run nobody was emailed about" --body "$body" "$@"
           }
           open_new_issue() {
             new_issue --label ci-failure --assignee "$GITHUB_REPOSITORY_OWNER" \
@@ -382,10 +386,14 @@ jobs:
 
           # One open issue collects the failures, so an outage at a package site does not
           # open one issue per run. A later failure becomes a comment on it, which notifies
-          # the assignee the same way. If the search or the comment fails, open an issue
-          # anyway: a duplicate is better than no notice.
-          open_issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
-            --json number --jq '.[0].number // empty') || open_issue=""
+          # the assignee the same way. Failures that land in the same few seconds can still
+          # open one each. If the lookup or the comment fails, open an issue anyway: a
+          # duplicate is better than no notice.
+          #
+          # The lookup lists issues directly. A search would lag behind an issue opened
+          # moments ago. The list also holds pull requests, which are left out.
+          open_issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=ci-failure&state=open&per_page=100" \
+            --jq '[.[] | select(.pull_request == null)][0].number // empty') || open_issue=""
           case "$open_issue" in
             ''|*[!0-9]*)
               open_new_issue
