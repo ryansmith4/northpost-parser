@@ -734,6 +734,59 @@ class AddressParserTest {
             assertThat(result.components().municipality()).isEqualTo("TORONTO");
             assertThat(result.components().province()).isEqualTo("ON");
         }
+
+        @ParameterizedTest
+        @ValueSource(
+                strings = {
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY  BC BC",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC V1M 2B3",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC BC V1M 2B3",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY, BC, BC V1M 2B3",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC V1M 2B3 BC",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BRITISH COLUMBIA V1M 2B3",
+                    "20852 78B AVE, LANGLEY BC BC V1M 2B3"
+                })
+        @DisplayName("Should keep a repeated province code out of the municipality")
+        void shouldKeepRepeatedProvinceCodeOutOfMunicipality(String address) {
+            var result = parser.parseAddress(address);
+
+            assertThat(result.components().municipality()).isEqualTo("LANGLEY");
+            assertThat(result.components().province()).isEqualTo("BC");
+        }
+
+        @Test
+        @DisplayName("Should keep the municipality intact when its province code is repeated after it")
+        void shouldKeepMunicipalityContainingProvinceCodeWhenCodeIsRepeated() {
+            var result = parser.parseAddress("JOHN SMITH\n1875 LAKESHORE RD\nNIAGARA ON THE LAKE ON ON L0S 1J0");
+
+            assertThat(result.components().municipality()).isEqualTo("NIAGARA ON THE LAKE");
+            assertThat(result.components().province()).isEqualTo("ON");
+        }
+
+        @ParameterizedTest
+        @ValueSource(
+                strings = {
+                    "JEAN TREMBLAY\n12 RUE SAINT-JEAN\nQUEBEC QC G1R 1P8",
+                    "JEAN TREMBLAY\n12 RUE SAINT-JEAN\nQUEBEC QC QC G1R 1P8",
+                    "JEAN TREMBLAY\n12 RUE SAINT-JEAN\nQUEBEC, QC G1R 1P8"
+                })
+        @DisplayName("Should not take a municipality named like its province as a repeat of the province")
+        void shouldNotTakeMunicipalityNamedLikeProvinceAsRepeat(String address) {
+            var result = parser.parseAddress(address);
+
+            assertThat(result.components().municipality()).isEqualTo("QUEBEC");
+            assertThat(result.components().province()).isEqualTo("QC");
+        }
+
+        @Test
+        @DisplayName("Should not merge two different province codes written in a row")
+        void shouldNotMergeDifferentProvinceCodes() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nPORT NB NS B0J 1J0");
+
+            assertThat(result.components().municipality()).isEqualTo("PORT NB");
+            assertThat(result.components().province()).isEqualTo("NS");
+        }
     }
 
     @Nested

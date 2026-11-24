@@ -1018,6 +1018,20 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
         }
 
+        // The same province written again just before it ("LANGLEY BC BC", "TORONTO ON ONTARIO",
+        // "LANGLEY BC V1M 2B3 BC") is a repeat, not the end of the municipality, so the province
+        // starts at the earliest copy. Only the 2-letter code is taken, never a name: in
+        // "QUEBEC QC" the word before the province is the municipality.
+        if (province != null) {
+            for (int i = provinceStartIdx - 1; i >= 0; i--) {
+                TokenInfo t = tokens.get(i);
+                if (t.type == CanadianAddressParser.COMMA) continue;
+                if (postalCodeStartIdx >= 0 && i >= postalCodeStartIdx && i <= postalCodeEndIdx) continue;
+                if (t.type != CanadianAddressParser.WORD || !t.text.equalsIgnoreCase(province)) break;
+                provinceStartIdx = i;
+            }
+        }
+
         if (province != null) {
             builder.province(province);
             logger.debug("Found province: '{}'", province);
