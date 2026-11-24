@@ -1018,11 +1018,14 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
         }
 
-        // The same province written again just before it ("LANGLEY BC BC", "TORONTO ON ONTARIO",
-        // "LANGLEY BC V1M 2B3 BC") is a repeat, not the end of the municipality, so the province
-        // starts at the earliest copy. Only the 2-letter code is taken, never a name: in
-        // "QUEBEC QC" the word before the province is the municipality.
         if (province != null) {
+            // The same 2-letter province code written again before the province ("LANGLEY BC BC",
+            // "TORONTO ON ONTARIO", "LANGLEY BC V1M 2B3 BC") is an extra copy, not the end of the
+            // municipality, so the province starts at the earliest copy. Commas and the postal code
+            // between copies are skipped; any other token between them ends the search. Only a code
+            // is dropped this way, never a province name: in "QUEBEC QC" the word before the
+            // province is the municipality. The cost: a municipality whose name really ends in its
+            // own province code loses that word.
             for (int i = provinceStartIdx - 1; i >= 0; i--) {
                 TokenInfo t = tokens.get(i);
                 if (t.type == CanadianAddressParser.COMMA) continue;
@@ -1030,9 +1033,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 if (t.type != CanadianAddressParser.WORD || !t.text.equalsIgnoreCase(province)) break;
                 provinceStartIdx = i;
             }
-        }
 
-        if (province != null) {
             builder.province(province);
             logger.debug("Found province: '{}'", province);
         }

@@ -739,7 +739,8 @@ class AddressParserTest {
         @ValueSource(
                 strings = {
                     "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC",
-                    "JOHN SMITH\n20852 78B AVE\nLANGLEY  BC BC",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC\nV1M 2B3",
+                    "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC CANADA",
                     "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC V1M 2B3",
                     "JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC BC V1M 2B3",
                     "JOHN SMITH\n20852 78B AVE\nLANGLEY, BC, BC V1M 2B3",
@@ -753,6 +754,56 @@ class AddressParserTest {
 
             assertThat(result.components().municipality()).isEqualTo("LANGLEY");
             assertThat(result.components().province()).isEqualTo("BC");
+        }
+
+        @Test
+        @DisplayName("Should leave the postal code and country alone when the province code is repeated")
+        void shouldLeavePostalCodeAndCountryAloneWhenProvinceCodeIsRepeated() {
+            var result = parser.parseAddress("JOHN SMITH\n20852 78B AVE\nLANGLEY BC BC V1M 2B3 CANADA");
+
+            assertThat(result.components().streetNumber()).isEqualTo("20852");
+            assertThat(result.components().municipality()).isEqualTo("LANGLEY");
+            assertThat(result.components().province()).isEqualTo("BC");
+            assertThat(result.components().postalCode()).isEqualTo("V1M 2B3");
+            assertThat(result.components().country()).isEqualTo("CANADA");
+        }
+
+        @Test
+        @DisplayName("Should drop a province code that is followed by the province name")
+        void shouldDropProvinceCodeFollowedByProvinceName() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nTORONTO ON ONTARIO");
+
+            assertThat(result.components().municipality()).isEqualTo("TORONTO");
+            assertThat(result.components().province()).isEqualTo("ON");
+        }
+
+        @Test
+        @DisplayName("Should leave the municipality empty when the line holds only a repeated province code")
+        void shouldLeaveMunicipalityEmptyWhenLineHoldsOnlyRepeatedProvinceCode() {
+            var result = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nBC BC V1M 2B3");
+
+            assertThat(result.components().municipality()).isEmpty();
+            assertThat(result.components().province()).isEqualTo("BC");
+            assertThat(result.components().postalCode()).isEqualTo("V1M 2B3");
+        }
+
+        @Test
+        @DisplayName("Known limit: a hyphen between the copies means the earlier one is not taken as a repeat")
+        void shouldNotTakeCopyBeforeHyphenAsRepeat() {
+            var result = parser.parseAddress("JOHN SMITH\n20852 78B AVE\nLANGLEY BC - BC");
+
+            assertThat(result.components().municipality()).isEqualTo("LANGLEY BC -");
+            assertThat(result.components().province()).isEqualTo("BC");
+        }
+
+        @Test
+        @DisplayName("Known limit: a country between the copies means the earlier one is not taken as a repeat")
+        void shouldNotTakeCopyBeforeCountryAsRepeat() {
+            var result = parser.parseAddress("JOHN SMITH\n20852 78B AVE\nLANGLEY BC CANADA BC");
+
+            assertThat(result.components().municipality()).isEqualTo("LANGLEY BC");
+            assertThat(result.components().province()).isEqualTo("BC");
+            assertThat(result.components().country()).isEqualTo("CANADA");
         }
 
         @Test
