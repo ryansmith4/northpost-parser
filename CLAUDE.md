@@ -70,7 +70,7 @@ Java 21 required (toolchain set in `build.gradle`). Always use the wrapper (`./g
 - JUnit 6 with AssertJ assertions
 - Tests instantiate services directly (no framework context)
 - `AddressParserTest` — unit tests for parser service (civic, French, PO box, rural, general delivery, strict/lenient strategies)
-- `OdaAddressTest` — parameterized test using 150 curated addresses from `oda_test_addresses.csv` (pipe-delimited, `\n` literals for line breaks); expectations were curated against ODA ground truth, empty name/unit/postal code means "not checked"
+- `OdaAddressTest` — parameterized test using about 150 curated addresses from `oda_test_addresses.csv` (pipe-delimited, `\n` literals for line breaks); expectations were curated against ODA ground truth, empty name/unit/postal code means "not checked"
 - `NarSampleRegressionTest` — replays `nar_sample_addresses.csv` (about 2,400 NAR addresses, all 13 provinces/territories, hard-case sections first; same format as the ODA file) and requires every field to equal the parser's recorded output. One test per province so the build stays fast. The file is a behaviour snapshot and the conformance target for ports to other languages: after an intentional parser change run `./gradlew refreshNarSample` and review the diff; `./gradlew drawNarSample` redraws the sample from `nar-data/` (`NarSampleGenerator`, seeded hash ranking, stratified by province × shape plus hard-case strata)
 - `AddressFixtures` reads/writes the shared pipe-delimited fixture format; `NarCsv` turns NAR CSV rows into address text for both the bulk test and the generator
 

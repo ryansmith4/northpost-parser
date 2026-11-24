@@ -190,8 +190,8 @@ This approach correctly handles addresses with or without an addressee line, reg
 
 | Suite | Scope | Description |
 |-------|-------|-------------|
-| `AddressParserTest` | Unit | 300+ tests across 20+ categories — civic, French, PO box, rural, lettered avenues, direction pairs, type disambiguation, hyphen/slash/ampersand preservation, edge cases, validation, batch, performance |
-| `OdaAddressTest` | Parameterized | 150 curated addresses from Statistics Canada ODA datasets |
+| `AddressParserTest` | Unit | About 200 tests across 20+ categories — civic, French, PO box, rural, lettered avenues, direction pairs, type disambiguation, hyphen/slash/ampersand preservation, edge cases, validation, batch, performance |
+| `OdaAddressTest` | Parameterized | About 150 curated addresses from Statistics Canada ODA datasets |
 | `NarSampleRegressionTest` | Parameterized | About 2,400 NAR addresses from all 13 provinces and territories plus known-hard patterns, replayed against the parser's recorded output (one test per province) |
 
 ### NAR Regression Sample
@@ -258,7 +258,7 @@ Validated against **16.4 million** addresses across all 13 provinces/territories
 | Parse success | **100.000%** | Every address parsed without errors |
 | Province | **100.000%** | |
 | Postal code | **100.000%** | |
-| City | **99.97%** | |
+| City | **99.98%** | |
 | Street number | **99.998%** | |
 | Unit number | **99.99%** | |
 | Street direction | **99.99%** | |
@@ -283,7 +283,7 @@ Validated against **16.4 million** addresses across all 13 provinces/territories
 | Street number | **99.13%** | 9,603,114 | ODA includes parentheses/annotations |
 | Street type | **96.77%** | 5,547,130 | Normalization gap (full vs abbreviated forms) |
 | Street direction | **96.64%** | 767,869 | Normalization gap (O vs OUEST, E vs EAST) |
-| Street name | **93.96%** | 6,076,730 | Ordinal forms and linking particle differences |
+| Street name | **93.21%** | 6,076,730 | Ordinal forms and linking particle differences |
 
 Not all ODA provinces provide all structured fields — "Addresses Tested" reflects only rows where ODA provides ground truth for that field.
 
