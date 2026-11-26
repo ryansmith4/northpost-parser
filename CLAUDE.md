@@ -24,7 +24,7 @@ GitHub is configured to **squash-and-merge** PRs. After a PR merges, use `git br
 ./gradlew drawNarSample            # Redraw the NAR regression sample from nar-data/ (deterministic, seeded)
 ```
 
-Java 21 required (toolchain set in `build.gradle`). Always use the wrapper (`./gradlew`); its Gradle version is defined in `gradle/wrapper/gradle-wrapper.properties` and kept current by Dependabot.
+Java 21 or later is required to build. Whichever JDK runs Gradle also compiles and tests; `options.release = 21` in `build.gradle` makes any of them produce Java 21 class files and reject newer APIs. There is no toolchain, so Gradle never looks for or downloads another JDK. Releases are built with JDK 21 (`release.yml`). Always use the wrapper (`./gradlew`); its Gradle version is defined in `gradle/wrapper/gradle-wrapper.properties` and kept current by Dependabot.
 
 ## Architecture
 
