@@ -22,7 +22,7 @@ grammar CanadianAddress;
 //   Line 3:  Delivery address — one of:
 //              Civic:    [unit] civicNumber streetName [streetType] [direction]
 //              PO Box:   PO BOX number [STN stationName]
-//              Rural:    RR number [STN stationName]
+//              Rural:    RR | R.R. | R R | R. R. followed by number [STN stationName]
 //              General:  GD [STN stationName]
 //   Line 4:  Municipality  Province  PostalCode
 //            (1 space between municipality and province,
@@ -92,6 +92,10 @@ addressLine
 // Sequence of tokens within a line.
 // WS* (not WS+) between tokens allows adjacent tokens for patterns
 // like C/O (WORD SLASH WORD) and 10-123 (NUMBER HYPHEN NUMBER).
+// Rural route prefixes remain structural: RR/R.R. are one WORD, while
+// R R/R. R. are two WORD tokens; the visitor recognizes both forms.
+// Single-letter units such as B-1565 are WORD HYPHEN NUMBER; the visitor
+// recognizes the hyphenated prefix as a unit rather than an addressee.
 lineContent
     : lineToken (WS* lineToken)*
     ;
@@ -129,21 +133,23 @@ NUMBER
     : [0-9]+
     ;
 
+// Mixed letter/digit sequences (e.g., 2Y7 for the second half of a spaced
+// postal code, 1ST/2ND/3RD for ordinal street names, 123A for civic number
+// suffixes, or B15/5A for unit numbers). Requires both a letter and a digit,
+// so ordinary words remain WORD tokens. It precedes WORD to win equal-length
+// matches for letter-leading codes.
+ALPHANUMERIC
+    : LETTER (LETTER | [0-9])* [0-9] (LETTER | [0-9])*
+    | [0-9] (LETTER | [0-9])* LETTER (LETTER | [0-9])*
+    ;
+
 // Text words — includes hyphenated names (O'Brien, Saint-Jean-sur-Richelieu,
 // Ste-Anne-de-Bellevue) and dotted abbreviations (P.O., R.R., St., Ave.)
 // because the characters are consumed greedily after an initial letter.
 // This means street types, province names, unit designators, and all other
 // keywords are lexed as WORD — the visitor distinguishes them semantically.
 WORD
-    : LETTER (LETTER | [0-9] | '\'' | '\u2019' | '-' | '.')*
-    ;
-
-// Digit-leading alphanumeric sequences (e.g., 2Y7 for the second half of a
-// spaced postal code, or 1ST/2ND/3RD for ordinal street names, or 123A for
-// civic number with suffix). Matches when a digit-start token contains letters,
-// beating NUMBER on length.
-ALPHANUMERIC
-    : (LETTER | [0-9])+
+    : LETTER (LETTER | [0-9] | '\'' | '\u2019' | '-' LETTER | '.')*
     ;
 
 fragment LETTER
