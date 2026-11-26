@@ -555,6 +555,24 @@ class AddressParserTest {
             assertThat(result.components().addressType()).isEqualTo(AddressType.POSTAL_BOX);
             assertThat(result.components().postalBoxNumber()).isEqualTo("890");
         }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"CP", "C.P", "C.P.", "CASE POSTALE", "case postale"})
+        void shouldParseAdditionalFrenchPostalBoxPrefixes(String prefix) {
+            var result = parser.parseAddress("ENTREPRISE LTÉE\n" + prefix + " 2086\nMONTRÉAL QC H1H 1H1");
+
+            assertThat(result.components().addressType()).isEqualTo(AddressType.POSTAL_BOX);
+            assertThat(result.components().postalBoxNumber()).isEqualTo("2086");
+        }
+
+        @Test
+        void shouldNotTreatCaseCompanyAsPostalBox() {
+            var result = parser.parseAddress("CASE COMPANY\n123 MAIN ST\nTORONTO ON");
+
+            assertThat(result.components().addressee()).isEqualTo("CASE COMPANY");
+            assertThat(result.components().postalBoxNumber()).isEmpty();
+            assertThat(result.components().addressType()).isEqualTo(AddressType.CIVIC);
+        }
     }
 
     @Nested
@@ -592,6 +610,36 @@ class AddressParserTest {
             assertThat(result.successful()).isTrue();
             assertThat(result.components().ruralRoute()).isEqualTo("2");
             assertThat(result.components().siteInfo()).isNotEmpty();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"R R", "R. R."})
+        void shouldParseSpacedRuralRoutePrefixes(String prefix) {
+            var result = parser.parseAddress("FARM OWNER\n" + prefix + " 5 STN MAIN\nRURAL TOWN AB T0L 1K0");
+
+            assertThat(result.components().addressType()).isEqualTo(AddressType.RURAL_ROUTE);
+            assertThat(result.components().ruralRoute()).isEqualTo("5");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"RR", "R.R.", "R R", "R. R."})
+        void shouldSplitRuralRouteFromSiteLine(String prefix) {
+            for (String site : List.of("SITE 4 BOX 23", "SITE 4 COMP 23", "COMP 23", "EMPL 4")) {
+                var result = parser.parseAddress("FARM OWNER\n" + site + " " + prefix + " 5\nTORONTO ON M5V 2Y7");
+
+                assertThat(result.components().siteInfo()).isEqualTo(site);
+                assertThat(result.components().ruralRoute()).isEqualTo("5");
+                assertThat(result.components().addressType()).isEqualTo(AddressType.RURAL_ROUTE);
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"SITE 4 BOX 23", "SITE 4 BOX 23 RR", "SITE 4 BOX 23 R R"})
+        void shouldPreserveSiteWithoutValidRuralRouteSuffix(String site) {
+            var result = parser.parseAddress(site + "\nTORONTO ON M5V 2Y7");
+
+            assertThat(result.components().siteInfo()).isEqualTo(site);
+            assertThat(result.components().ruralRoute()).isEmpty();
         }
     }
 
@@ -2240,6 +2288,24 @@ class AddressParserTest {
             var result = parser.parseAddress("APT PH01 5 STRAWBERRY LANE\nTORONTO ON M5V 2Y7");
             assertThat(result.components().unitNumber()).isEqualTo("PH01");
             assertThat(result.components().streetNumber()).isEqualTo("5");
+        }
+
+        @Test
+        void shouldParsePhAsUnitValue() {
+            var result = parser.parseAddress("APT PH 5 STRAWBERRY LANE\nTORONTO ON M5V 2Y7");
+            assertThat(result.components().unitNumber()).isEqualTo("PH");
+            assertThat(result.components().streetNumber()).isEqualTo("5");
+        }
+
+        @Test
+        void shouldParseRmAndSteAsUnitDesignators() {
+            var room = parser.parseAddress("RM 12 5 MAIN ST\nTORONTO ON M5V 2Y7");
+            var suite = parser.parseAddress("STE 200 123 MAIN ST\nTORONTO ON M5V 2Y7");
+
+            assertThat(room.components().unitNumber()).isEqualTo("12");
+            assertThat(room.components().streetNumber()).isEqualTo("5");
+            assertThat(suite.components().unitNumber()).isEqualTo("200");
+            assertThat(suite.components().streetNumber()).isEqualTo("123");
         }
     }
 }

@@ -742,7 +742,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     private static final Set<String> COUNTRY_KEYWORDS = Set.of("CANADA", "CAN", "CA");
 
     /** PO Box keywords (English and French) */
-    private static final Set<String> PO_BOX_KEYWORDS = Set.of("PO", "P.O.", "CP", "C.P.", "BOX");
+    private static final Set<String> PO_BOX_KEYWORDS = Set.of("PO", "P.O.", "CP", "C.P", "C.P.", "BOX");
 
     /** Postal code pattern: A1A 1A1 or A1A1A1 */
     private static final Pattern POSTAL_CODE_FSA = Pattern.compile("[A-Z]\\d[A-Z]");
@@ -858,7 +858,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 switch (cl.role()) {
                     case DELIVERY -> interpretDeliveryLine(cl.line());
                     case CARE_OF -> builder.careOf(extractAfterCareOf(cl.line().tokens));
-                    case SITE_INFO -> builder.siteInfo(cl.line().text);
+                    case SITE_INFO -> interpretSiteLine(cl.line());
                     case COUNTRY -> builder.country(cl.line().text);
                     case POSTAL_CODE_ONLY -> {
                         String pc = findPostalCode(cl.line());
@@ -1101,13 +1101,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
 
         // Check for PO Box: starts with PO, CP, BOX, P.O., C.P.
-        if (PO_BOX_KEYWORDS.contains(firstText)) {
+        if (isPostalBoxLine(tokens)) {
             interpretPoBoxLine(tokens);
             return;
         }
 
-        // Check for Rural Route: starts with RR or R.R.
-        if (firstText.equals("RR") || firstText.equals("R.R.")) {
+        if (isRuralRouteLine(tokens)) {
             interpretRuralRouteLine(tokens);
             return;
         }
@@ -1120,7 +1119,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Check for site info: starts with SITE or COMP
         if (firstText.equals("SITE") || firstText.equals("COMP") || firstText.equals("EMPL")) {
-            builder.siteInfo(line.text);
+            interpretSiteLine(line);
             return;
         }
 
@@ -1690,8 +1689,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
     private void interpretRuralRouteLine(List<TokenInfo> tokens) {
         builder.addressType(AddressType.RURAL_ROUTE);
-        // Find the route number (first NUMBER after RR)
-        for (int i = 1; i < tokens.size(); i++) {
+        // Find the route number after RR, R.R., or the spaced R R form.
+        for (int i = ruralRoutePrefixLength(tokens); i < tokens.size(); i++) {
             TokenInfo t = tokens.get(i);
             if (t.type == CanadianAddressParser.NUMBER) {
                 builder.ruralRoute(t.text);
@@ -1705,6 +1704,46 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     // ---- Helper methods ----
+
+    private void interpretSiteLine(LineTokens line) {
+        List<TokenInfo> tokens = line.tokens;
+        for (int i = 1; i < tokens.size(); i++) {
+            List<TokenInfo> routeTokens = tokens.subList(i, tokens.size());
+            int prefixLength = ruralRoutePrefixLength(routeTokens);
+            if (prefixLength > 0
+                    && i + prefixLength < tokens.size()
+                    && tokens.get(i + prefixLength).type == CanadianAddressParser.NUMBER) {
+                builder.siteInfo(buildText(tokens.subList(0, i)));
+                interpretRuralRouteLine(routeTokens);
+                return;
+            }
+        }
+        builder.siteInfo(line.text);
+    }
+
+    private static boolean isPostalBoxLine(List<TokenInfo> tokens) {
+        if (tokens.isEmpty()) return false;
+        return PO_BOX_KEYWORDS.contains(tokens.get(0).text.toUpperCase())
+                || (tokens.size() >= 2
+                        && tokens.get(0).text.equalsIgnoreCase("CASE")
+                        && tokens.get(1).text.equalsIgnoreCase("POSTALE"));
+    }
+
+    private static boolean isRuralRouteLine(List<TokenInfo> tokens) {
+        return ruralRoutePrefixLength(tokens) > 0;
+    }
+
+    private static int ruralRoutePrefixLength(List<TokenInfo> tokens) {
+        if (tokens.isEmpty()) return 0;
+        String first = tokens.get(0).text.toUpperCase();
+        if (first.equals("RR") || first.equals("R.R.")) return 1;
+        if (tokens.size() >= 2
+                && stripPeriod(first).equals("R")
+                && stripPeriod(tokens.get(1).text.toUpperCase()).equals("R")) {
+            return 2;
+        }
+        return 0;
+    }
 
     private boolean isCareOfLine(List<TokenInfo> tokens) {
         // Pattern: WORD('C') SLASH WORD('O') or WORD('A') SLASH WORD('S')
@@ -1945,7 +1984,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
         String firstText = first.text.toUpperCase();
         // Starts with PO Box, RR, GD, or unit designator → delivery line
-        if (PO_BOX_KEYWORDS.contains(firstText) || firstText.equals("RR") || firstText.equals("GD")) {
+        if (isPostalBoxLine(tokens) || isRuralRouteLine(tokens) || firstText.equals("GD")) {
             return true;
         }
         // "GENERAL DELIVERY" or "GEN DEL" patterns

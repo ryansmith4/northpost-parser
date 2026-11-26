@@ -49,3 +49,7 @@ build/qodana/
 oda-data/
 nar-data/
 src/test/resources/ODA_*/
+
+### Python
+python/dist/
+**/__pycache__/*.pyc
