@@ -116,7 +116,7 @@ With unit (multiple styles):  PO Box:
   5-456 ELM AVE                Rural Route:
   456 ELM AVE APT 5
   456 ELM AVE APT5
-                                  RR 2 STN MAIN
+  APT 5 (on its own line)         RR 2 STN MAIN
 Lettered avenue (SK/ON):       Fractional civic:
   402 AVENUE P S                  123 1/2 MAIN STREET
                                General Delivery:

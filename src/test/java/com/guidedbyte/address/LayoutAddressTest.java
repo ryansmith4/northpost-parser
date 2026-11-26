@@ -33,19 +33,30 @@ class LayoutAddressTest {
         return AddressFixtures.load(RESOURCE).stream();
     }
 
-    /** {@link AddressFixtures#load} drops a line with too few columns without saying so; this catches that. */
+    /**
+     * Checks the shape of the file itself. {@link AddressFixtures#load} skips the first line that is not a comment as
+     * the header, drops a line with too few columns and ignores extra columns, all without saying so; a hand-edited
+     * file needs those mistakes reported.
+     */
     @Test
-    void everyDataLineIsLoaded() throws Exception {
-        List<String> dataLines;
+    void fileIsWellFormed() throws Exception {
+        List<String> lines;
         try (var in = LayoutAddressTest.class.getResourceAsStream(RESOURCE)) {
-            dataLines = new String(in.readAllBytes(), StandardCharsets.UTF_8)
+            lines = new String(in.readAllBytes(), StandardCharsets.UTF_8)
                     .lines()
                     .map(String::trim)
                     .filter(line -> !line.isEmpty() && !line.startsWith("#"))
                     .toList();
         }
-        // The first line that is not a comment is the column header.
-        assertThat(AddressFixtures.load(RESOURCE)).hasSize(dataLines.size() - 1).isNotEmpty();
+        assertThat(lines).isNotEmpty();
+        assertThat(lines.get(0)).as("first line that is not a comment").isEqualTo(AddressFixtures.HEADER);
+        List<String> dataLines = lines.subList(1, lines.size());
+        assertThat(dataLines)
+                .isNotEmpty()
+                .allSatisfy(line -> assertThat(line.split("\\|", -1))
+                        .as("columns in: %s", line)
+                        .hasSize(9));
+        assertThat(AddressFixtures.load(RESOURCE)).hasSize(dataLines.size());
     }
 
     @ParameterizedTest(name = "[{index}] {0}")

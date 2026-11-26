@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * Reads and writes the pipe-delimited address fixture files in {@code src/test/resources}
- * ({@code oda_test_addresses.csv}, {@code nar_sample_addresses.csv}).
+ * ({@code oda_test_addresses.csv}, {@code nar_sample_addresses.csv}, {@code layout_test_addresses.csv}).
  *
  * <p>Format, one fixture per line:
  *
