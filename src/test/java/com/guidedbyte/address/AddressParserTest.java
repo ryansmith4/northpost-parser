@@ -2361,39 +2361,78 @@ class AddressParserTest {
         }
 
         @ParameterizedTest(name = "{0}")
-        @CsvSource(
-                delimiter = '|',
-                value = {
-                    "TOWER RD      | RD",
-                    "OFFICE PARK   | PARK",
-                    "APT PENTHOUSE | PENTHOUSE",
-                    "UNIT UPPER    | UPPER"
+        @ValueSource(
+                strings = {
+                    "TOWER RD",
+                    "OFFICE PARK",
+                    "UNIT RD",
+                    "STE ANNE",
+                    "APT 4 5",
+                    "PH 4165551234",
+                    "SUITE 100 2ND FLOOR"
                 })
-        @DisplayName(
-                "Known limit: a unit word and a longer word is not a unit line, and still replaces the street name")
-        void shouldNotTakeWordAfterDesignatorAsUnit(String line, String nameAfterwards) {
-            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\n" + line + CITY_LINE)
+        @DisplayName("A line that starts with a unit word but is neither a unit nor a street leaves the street alone")
+        void shouldIgnoreUnitWordLineThatIsNotAUnit(String line) {
+            var alone =
+                    parser.parseAddress("JOHN SMITH\n123 MAIN ST" + CITY_LINE).components();
+            assertThat(alone.streetNumber()).isEqualTo("123");
+            assertThat(alone.streetName()).isEqualTo("MAIN");
+            assertThat(alone.unitNumber()).isEmpty();
+
+            var after = parser.parseAddress("JOHN SMITH\n123 MAIN ST\n" + line + CITY_LINE)
                     .components();
-            assertThat(c.unitNumber()).isEmpty();
-            assertThat(c.streetNumber()).isEqualTo("123");
-            assertThat(c.streetName()).isEqualTo(nameAfterwards);
+            var before = parser.parseAddress("JOHN SMITH\n" + line + "\n123 MAIN ST" + CITY_LINE)
+                    .components();
+            assertThat(after).as("%s after the street line", line).isEqualTo(alone);
+            assertThat(before).as("%s before the street line", line).isEqualTo(alone);
         }
 
-        @ParameterizedTest(name = "{0}")
-        @CsvSource(
-                delimiter = '|',
-                value = {
-                    "APT 4 5           | 4 | 5   | MAIN",
-                    "APT 405 - 2       |   | 405 | 2",
-                    "SUITE 200 FLOOR 2 |   | 200 | FLOOR 2"
-                })
-        @DisplayName("Known limit: a unit line holding more than one value still replaces the street number")
-        void shouldNotTakeSeveralValuesAsUnitLine(String line, String unit, String number, String name) {
-            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\n" + line + CITY_LINE)
+        @Test
+        @DisplayName("Known limit: with no numbered street line, a unit word and a longer word is read as a street")
+        void shouldStillReadUnitWordLineAsStreetWhenNoOtherStreet() {
+            var c = parser.parseAddress("JOHN SMITH\nTOWER RD" + CITY_LINE).components();
+            assertThat(c.unitNumber()).isEmpty();
+            assertThat(c.streetName()).isEqualTo("RD");
+
+            // A floor line starts with a number but is not a street line, so the result is the same with one
+            var withFloor = parser.parseAddress("JOHN SMITH\nTOWER RD\n2ND FLOOR" + CITY_LINE)
                     .components();
-            assertThat(c.unitNumber()).isEqualTo(unit == null ? "" : unit);
-            assertThat(c.streetNumber()).isEqualTo(number);
-            assertThat(c.streetName()).isEqualTo(name);
+            assertThat(withFloor.unitNumber()).isEqualTo("2");
+            assertThat(withFloor.streetName()).isEqualTo("RD");
+        }
+
+        @Test
+        @DisplayName("A street line that starts with a unit word is read even when another line starts with a number")
+        void shouldReadUnitWordStreetLineBesideAnotherNumberedLine() {
+            // "3M CANADA" starts with a number, so it counts as a numbered line; the real street line follows
+            var c = parser.parseAddress("3M CANADA\nSUITE 200 300 TARTAN DR\nLONDON ON N5V 4M9")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("200");
+            assertThat(c.streetNumber()).isEqualTo("300");
+            assertThat(c.streetName()).isEqualTo("TARTAN");
+            assertThat(c.streetType()).isEqualTo("DR");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"4TH LINE", "2ND AVE", "5E RANG"})
+        @DisplayName("An ordinal before a word other than a floor word is not a unit line")
+        void shouldNotTakeOrdinalStreetAsFloor(String line) {
+            var c = parser.parseAddress("JOHN SMITH\n" + line + "\nORO-MEDONTE ON L0L 2E0")
+                    .components();
+            assertThat(c.unitNumber()).isEmpty();
+            assertThat(c.streetNumber()).isEqualTo(line.substring(0, line.indexOf(' ')));
+        }
+
+        @Test
+        @DisplayName("A street line that starts with a unit word is still a street line")
+        void shouldKeepReadingStreetLineThatStartsWithUnitWord() {
+            // Another line starts with a number here ("2ND FLOOR"), but it is a floor, not the street
+            var c = parser.parseAddress("JOHN SMITH\nAPT 394 QUEEN ST\n2ND FLOOR" + CITY_LINE)
+                    .components();
+            assertThat(c.streetNumber()).isEqualTo("394");
+            assertThat(c.streetName()).isEqualTo("QUEEN");
+            assertThat(c.streetType()).isEqualTo("ST");
+            assertThat(c.unitNumber()).isEqualTo("2");
         }
 
         @Test
@@ -2405,16 +2444,6 @@ class AddressParserTest {
             assertThat(c.unitNumber()).isEqualTo("394");
             assertThat(c.streetNumber()).isEmpty();
             assertThat(c.streetName()).isEqualTo("QUEEN");
-        }
-
-        @Test
-        @DisplayName("Known limit (#89): unit between commas on a single line joins the municipality")
-        void shouldNotYetReadUnitBetweenCommasOnSingleLine() {
-            var c = parser.parseAddress("123 MAIN ST, APT 4, TORONTO ON M5V 2Y7")
-                    .components();
-            assertThat(c.unitNumber()).isEmpty();
-            assertThat(c.streetNumber()).isEqualTo("123");
-            assertThat(c.municipality()).isEqualTo("APT 4 TORONTO");
         }
     }
 }

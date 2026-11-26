@@ -4,6 +4,7 @@ import com.guidedbyte.address.model.AddressComponents;
 import com.guidedbyte.address.model.AddressComponents.AddressType;
 import com.guidedbyte.address.model.AddressComponents.ParsingMode;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -693,6 +694,25 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         return BUILDING_PART_DESIGNATORS.contains(upper.endsWith(".") ? upper.substring(0, upper.length() - 1) : upper);
     }
 
+    /**
+     * Unit designators after which a word can be the unit value ("APT BSMT", "UNIT UPPER", "SUITE PH"). STE is left out
+     * because "STE ANNE" is far more often Sainte-Anne than a suite.
+     */
+    private static final Set<String> WORD_VALUE_DESIGNATORS =
+            Set.of("APT", "APARTMENT", "UNIT", "SUITE", "APP", "APPARTEMENT");
+
+    /** Words that follow an ordinal to name a floor ("2ND FLOOR", "3E ÉTAGE"). */
+    private static final Set<String> FLOOR_WORDS = Set.of("FLOOR", "FL", "ÉTAGE", "ETAGE");
+
+    private static final Pattern ORDINAL = Pattern.compile("(\\d{1,3})(ST|ND|RD|TH|E|ER|RE|EME|ÈME|IEME|IÈME)");
+
+    /** A number this long after a unit word is a telephone number or an account number, not a unit. */
+    private static final int LONGEST_UNIT_NUMBER = 6;
+
+    private static String withoutTrailingDot(String word) {
+        return word.endsWith(".") ? word.substring(0, word.length() - 1) : word;
+    }
+
     /** Designators sorted by length descending for longest-match-first (Plan 4) */
     private static final List<String> UNIT_DESIGNATORS_BY_LENGTH;
 
@@ -774,6 +794,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     /** True while the unit number in the builder came from a building or floor word ("FLOOR 2", "TOWER B"). */
     private boolean unitIsBuildingPart;
 
+    /** True when a line of the address before the region line starts with a street number ("123 MAIN ST"). */
+    private boolean addressHasNumberedStreetLine;
+
     public AddressComponentVisitor() {
         this(ParsingMode.LENIENT);
     }
@@ -824,6 +847,13 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 parsedLines = splitLines;
                 commaSplit = true;
                 logger.debug("Comma-split produced {} lines", parsedLines.size());
+            }
+        }
+
+        // The last line is the region line; any line before it may be the street line
+        for (int i = 0; i < parsedLines.size() - 1; i++) {
+            if (startsWithStreetNumber(parsedLines.get(i).tokens)) {
+                addressHasNumberedStreetLine = true;
             }
         }
 
@@ -1145,8 +1175,26 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             return;
         }
 
+        // A line that holds only units ("APT 4", "SUITE 200 FLOOR 2", "2ND FLOOR") sets the unit and leaves the
+        // street fields to the street line. Read as a street line it would take the unit value for the street
+        // number or name and overwrite what the street line set. recordUnitFromOwnLine says which unit is kept
+        // when the address gives more than one.
+        List<UnitPart> unitParts = unitOnlyLine(tokens);
+        if (unitParts != null) {
+            for (UnitPart part : unitParts) {
+                recordUnitFromOwnLine(part.value(), part.designator());
+            }
+            return;
+        }
+
         // Check if line starts with a unit designator (APT 5, APT. 5, etc.)
         if (isUnitDesignator(firstText)) {
+            if (addressHasNumberedStreetLine && !hasStreetOfItsOwn(tokens)) {
+                // Not a unit line and not a street line ("TOWER RD", "PH 4165551234") while another line gives
+                // the street: leave the street fields alone.
+                logger.debug("Ignoring line that is neither a unit nor a street: '{}'", line.text);
+                return;
+            }
             interpretCivicLineWithLeadingUnit(tokens);
             return;
         }
@@ -1154,11 +1202,6 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // Plan 4: Check for concatenated unit+number (APT5, STE200, APT.5)
         UnitSplit unitSplit = tryExtractUnitPrefix(firstText);
         if (unitSplit != null) {
-            if (countWithoutTrailingCommas(tokens) == 1) {
-                // "APT4" alone on a line: a unit written on a line of its own
-                recordUnitFromOwnLine(stripTrailingDots(unitSplit.unitNumber), unitSplit.designator);
-                return;
-            }
             recordUnitFromStreetLine(unitSplit.unitNumber, unitSplit.designator);
             // Continue parsing remaining tokens as civic line (skip first token)
             int idx = 1;
@@ -1272,17 +1315,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         int idx = 1; // skip the designator
         if (idx >= tokens.size()) return;
 
-        // A line that holds only the designator and one value ("APT 4", "SUITE 200", "UNIT B") is a unit written
-        // on a line of its own. Record the unit and leave the street fields to the street line. Without this the
-        // look-ahead below finds no civic number after the value, takes the value as the civic number or street
-        // name, and overwrites what the street line set. recordUnitFromOwnLine says which unit is kept when the
-        // address gives more than one.
         String designator = tokens.get(0).text;
-        String loneUnit = loneUnitValue(tokens);
-        if (loneUnit != null) {
-            recordUnitFromOwnLine(loneUnit, designator);
-            return;
-        }
 
         // Try to coalesce adjacent compound tokens into a single unit value (1/2, 405-2, 1101.1)
         // A comma may separate the unit value from the civic number in the French form (APP 4, 123, RUE ...).
@@ -1389,21 +1422,114 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         return text.substring(0, end);
     }
 
-    /**
-     * Returns the unit value when a line consists of a unit designator followed by one value and nothing else, or null
-     * when the line holds anything more. A comma or period at the end of the line is ignored ({@code APT 4,}).
-     *
-     * <p>One value is anything written without a space: a number ({@code APT 4}), a single letter ({@code APT A}), a
-     * code ({@code UNIT 4B}, {@code SUITE B2}), or parts joined by a hyphen, slash or period ({@code APT A-101},
-     * {@code APT 4-A}, {@code APT 405-2}, {@code APT 1/2}). Apart from a single letter it must contain a digit, so a
-     * line such as {@code TOWER RD} or {@code APT PENTHOUSE} is not a unit line; such a line is read as before.
-     */
-    private static String loneUnitValue(List<TokenInfo> tokens) {
-        int end = countWithoutTrailingCommas(tokens);
-        if (end < 2) return null;
+    /** One unit read from a line that holds only units: the unit word and the value that followed it. */
+    private record UnitPart(String designator, String value) {}
 
-        StringBuilder joined = new StringBuilder();
-        for (int i = 1; i < end; i++) {
+    /**
+     * Reads a line that holds only units, or returns null when the line holds anything else. Such a line is one or more
+     * unit words, each followed by its value: {@code APT 4}, {@code APT4}, {@code SUITE 200 FLOOR 2}, {@code BLDG 4,
+     * UNIT 12}. An ordinal before a floor word counts too ({@code 2ND FLOOR}, {@code 3E ÉTAGE}). Commas between units
+     * and at the end of the line are ignored.
+     *
+     * <p>A value is made of numbers, single letters and codes that contain a digit ({@code 4}, {@code A}, {@code 4B},
+     * {@code B2}, {@code A-101}, {@code 4-A}, {@code 405-2}, {@code 1/2}, {@code 12 B}); see {@link #unitValue}. Any
+     * other word means the line is not a unit line, which is what keeps {@code APT 394 QUEEN ST} and {@code TOWER RD}
+     * out. Two exceptions, both only after an apartment, suite or unit word: a single word that is not a street type
+     * ({@code APT BSMT}, {@code UNIT UPPER}), and a second unit word used as the value ({@code UNIT PH}).
+     */
+    private static List<UnitPart> unitOnlyLine(List<TokenInfo> tokens) {
+        int end = countWithoutTrailingCommas(tokens);
+
+        if (end == 2 && tokens.get(0).type == CanadianAddressParser.ALPHANUMERIC) {
+            Matcher ordinal = ORDINAL.matcher(tokens.get(0).text.toUpperCase());
+            String floorWord = withoutTrailingDot(tokens.get(1).text.toUpperCase());
+            if (ordinal.matches() && FLOOR_WORDS.contains(floorWord)) {
+                return List.of(new UnitPart(floorWord, ordinal.group(1)));
+            }
+            return null;
+        }
+
+        List<UnitPart> parts = new ArrayList<>();
+        int i = 0;
+        while (i < end) {
+            TokenInfo t = tokens.get(i);
+            if (t.type == CanadianAddressParser.COMMA) {
+                i++;
+                continue;
+            }
+            if (t.type != CanadianAddressParser.WORD) return null;
+            String word = t.text.toUpperCase();
+
+            if (!isUnitDesignator(word)) {
+                // "APT4": unit word and value written together
+                UnitSplit joined = tryExtractUnitPrefix(word);
+                if (joined == null) return null;
+                parts.add(new UnitPart(joined.designator(), stripTrailingDots(joined.unitNumber())));
+                i++;
+                continue;
+            }
+
+            boolean wordValueAllowed = WORD_VALUE_DESIGNATORS.contains(withoutTrailingDot(word));
+            int valueStart = i + 1;
+            int valueEnd = valueStart;
+            while (valueEnd < end && !startsUnitPart(tokens.get(valueEnd))) {
+                valueEnd++;
+            }
+
+            if (valueEnd == valueStart) {
+                // No value: the line ends here, or a comma or another unit word follows
+                boolean unitWordFollows = valueStart < end && tokens.get(valueStart).type == CanadianAddressParser.WORD;
+                if (!unitWordFollows) return null;
+                if (valueStart < end - 1) {
+                    // "APT PH 2": the first unit word only introduces the second
+                    i = valueStart;
+                    continue;
+                }
+                if (!wordValueAllowed) return null;
+                // "UNIT PH": the second unit word is the value
+                parts.add(new UnitPart(word, stripTrailingDots(tokens.get(valueStart).text)));
+                return parts;
+            }
+
+            String value = unitValue(tokens, valueStart, valueEnd, wordValueAllowed);
+            if (value == null) return null;
+            parts.add(new UnitPart(word, value));
+            i = valueEnd;
+        }
+        return parts.isEmpty() ? null : parts;
+    }
+
+    /** True for a token that begins another unit on a unit-only line: a comma, a unit word, or "APT4". */
+    private static boolean startsUnitPart(TokenInfo t) {
+        if (t.type == CanadianAddressParser.COMMA) return true;
+        if (t.type != CanadianAddressParser.WORD) return false;
+        String word = t.text.toUpperCase();
+        return isUnitDesignator(word) || tryExtractUnitPrefix(word) != null;
+    }
+
+    /**
+     * Reads the tokens from {@code start} to {@code end} as one unit value, or returns null when they are not one.
+     *
+     * <p>Tokens written without a space between them form one group ({@code 405-2}, {@code A-101}). The first group
+     * must contain a digit or be a single letter. After it the value may go on with a single letter ({@code 12 B}) or
+     * with a hyphen or slash standing alone and one more group ({@code 405 - 2}, read as {@code 405-2}). A second
+     * number after a space ends the value: in {@code APT 6 1236 4E-ET-5E-RANG} the 1236 is the street number, so that
+     * line is not a unit line. A number longer than {@link #LONGEST_UNIT_NUMBER} digits is not a unit.
+     *
+     * @param wordValueAllowed whether a single word that is not a street type is accepted ({@code BSMT})
+     */
+    private static String unitValue(List<TokenInfo> tokens, int start, int end, boolean wordValueAllowed) {
+        if (wordValueAllowed && end - start == 1 && tokens.get(start).type == CanadianAddressParser.WORD) {
+            String word = stripTrailingDots(tokens.get(start).text);
+            boolean letters = word.chars().allMatch(Character::isLetter);
+            if (letters && word.length() > 1 && !isStreetType(word.toUpperCase())) {
+                return word;
+            }
+        }
+
+        List<String> groups = new ArrayList<>();
+        StringBuilder group = new StringBuilder();
+        for (int i = start; i < end; i++) {
             TokenInfo t = tokens.get(i);
             boolean part = t.type == CanadianAddressParser.NUMBER
                     || t.type == CanadianAddressParser.ALPHANUMERIC
@@ -1412,15 +1538,70 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                     || t.type == CanadianAddressParser.SLASH
                     || t.type == CanadianAddressParser.DOT;
             if (!part && !joiner) return null;
-            // A space before this token means the line holds more than one value ("APT 4 5", "APT 405 - 2")
-            if (i > 1 && !areAdjacent(tokens.get(i - 1), t)) return null;
-            joined.append(t.text);
+            if (t.type == CanadianAddressParser.NUMBER && t.text.length() > LONGEST_UNIT_NUMBER) return null;
+            if (i > start && !areAdjacent(tokens.get(i - 1), t)) {
+                groups.add(group.toString());
+                group.setLength(0);
+            }
+            group.append(t.text);
         }
+        groups.add(group.toString());
 
-        String value = stripTrailingDots(joined.toString());
-        boolean singleLetter = value.length() == 1 && Character.isLetter(value.charAt(0));
-        boolean hasDigit = value.chars().anyMatch(Character::isDigit);
-        return singleLetter || hasDigit ? value : null;
+        StringBuilder value = new StringBuilder();
+        boolean afterJoiner = false;
+        for (int g = 0; g < groups.size(); g++) {
+            String text = stripTrailingDots(groups.get(g));
+            boolean joinerAlone = text.equals("-") || text.equals("/");
+            boolean singleLetter = text.length() == 1 && Character.isLetter(text.charAt(0));
+            boolean hasDigit = text.chars().anyMatch(Character::isDigit);
+            if (joinerAlone) {
+                if (g == 0 || g == groups.size() - 1) return null;
+            } else if (!singleLetter && !hasDigit) {
+                return null;
+            } else if (g > 0 && !afterJoiner && !singleLetter) {
+                return null;
+            }
+            if (g > 0 && !joinerAlone && !afterJoiner) {
+                value.append(' ');
+            }
+            value.append(text);
+            afterJoiner = joinerAlone;
+        }
+        return value.toString();
+    }
+
+    /**
+     * True when a line starts with a street number: a number or a code such as {@code 123A}, in parentheses or after a
+     * direction letter too ({@code (3195) MAIN ST}, {@code N 123 MAIN ST}). A floor line such as {@code 2ND FLOOR} does
+     * not count.
+     */
+    private static boolean startsWithStreetNumber(List<TokenInfo> tokens) {
+        if (tokens.isEmpty() || unitOnlyLine(tokens) != null) return false;
+        int first = 0;
+        if (tokens.size() >= 2
+                && (tokens.get(0).type == CanadianAddressParser.LPAREN
+                        || PREFIX_DIRECTIONS.contains(tokens.get(0).text.toUpperCase()))) {
+            first = 1;
+        }
+        int type = tokens.get(first).type;
+        return type == CanadianAddressParser.NUMBER || type == CanadianAddressParser.ALPHANUMERIC;
+    }
+
+    /**
+     * True when a line that starts with a unit word also names a street: a number followed, somewhere, by a word that
+     * is not another unit word ({@code APT 394 QUEEN ST}, {@code APT 5 123 MAIN ST}).
+     */
+    private static boolean hasStreetOfItsOwn(List<TokenInfo> tokens) {
+        boolean numberSeen = false;
+        for (int i = 1; i < tokens.size(); i++) {
+            TokenInfo t = tokens.get(i);
+            if (t.type == CanadianAddressParser.NUMBER || t.type == CanadianAddressParser.ALPHANUMERIC) {
+                numberSeen = true;
+            } else if (numberSeen && t.type == CanadianAddressParser.WORD && !isUnitDesignator(t.text.toUpperCase())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1921,6 +2102,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // is included in the region, not the delivery part.
         int bestCommaIdx = -1;
         int bestAfterIdx = -1;
+        boolean onlyNumberSegmentsSoFar = true;
         for (int ci = 0; ci < commaPositions.size(); ci++) {
             int commaIdx = commaPositions.get(ci);
             // Get first significant token after comma
@@ -1932,9 +2114,20 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
             // French civic-number comma ("123, RUE PRINCIPALE" or "APP 4, 123, RUE PRINCIPALE"):
             // when the segment since the previous comma is only a civic or unit number, this comma
-            // follows the number and is not the delivery/region boundary.
+            // follows the number and is not the delivery/region boundary. That holds only at the start of
+            // the line: once the street has been written, a number segment is a unit that follows it
+            // ("123 MAIN ST, APT 4, TORONTO ON"), and the comma after it can be the boundary.
             int segmentStart = ci == 0 ? 0 : commaPositions.get(ci - 1) + 1;
-            if (isCivicNumberSegment(tokens.subList(segmentStart, commaIdx))) continue;
+            if (onlyNumberSegmentsSoFar && isCivicNumberSegment(tokens.subList(segmentStart, commaIdx))) continue;
+            onlyNumberSegmentsSoFar = false;
+
+            // A unit between two commas ("123 MAIN ST, APT 4, TORONTO ON"): the segment after this comma is a
+            // unit, so the region starts at a later comma.
+            if (ci + 1 < commaPositions.size()
+                    && afterIdx < commaPositions.get(ci + 1)
+                    && unitOnlyLine(tokens.subList(afterIdx, commaPositions.get(ci + 1))) != null) {
+                continue;
+            }
 
             // Check if tokens from afterIdx to end contain a province code/name or postal code
             boolean hasRegionMarker = false;
@@ -2006,11 +2199,30 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 return List.of(new LineTokens(combinedRegion, combinedText));
             }
 
-            String deliveryText = buildText(deliveryTokens);
-            String regionText = buildText(regionTokens);
+            // A unit segment after the first segment ("123 MAIN ST, APT 4") becomes a line of its own, read like a
+            // unit written on its own line. The other segments stay together as the street line.
+            List<TokenInfo> streetTokens = new ArrayList<>();
+            List<LineTokens> result = new ArrayList<>();
+            int segmentStart = 0;
+            for (int k = 0; k <= deliveryTokens.size(); k++) {
+                if (k < deliveryTokens.size() && deliveryTokens.get(k).type != CanadianAddressParser.COMMA) continue;
+                List<TokenInfo> segment = new ArrayList<>(deliveryTokens.subList(segmentStart, k));
+                if (segmentStart > 0 && !segment.isEmpty() && unitOnlyLine(segment) != null) {
+                    result.add(new LineTokens(segment, buildText(segment)));
+                } else {
+                    if (segmentStart > 0 && !streetTokens.isEmpty()) {
+                        streetTokens.add(deliveryTokens.get(segmentStart - 1)); // the comma before this segment
+                    }
+                    streetTokens.addAll(segment);
+                }
+                segmentStart = k + 1;
+            }
+            result.add(0, new LineTokens(streetTokens, buildText(streetTokens)));
 
-            logger.debug("Comma split: delivery='{}', region='{}'", deliveryText, regionText);
-            return List.of(new LineTokens(deliveryTokens, deliveryText), new LineTokens(regionTokens, regionText));
+            String regionText = buildText(regionTokens);
+            result.add(new LineTokens(regionTokens, regionText));
+            logger.debug("Comma split: {} delivery line(s), region='{}'", result.size() - 1, regionText);
+            return result;
         }
 
         return null;
