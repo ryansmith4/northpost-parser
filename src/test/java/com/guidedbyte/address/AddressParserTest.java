@@ -2370,8 +2370,12 @@ class AddressParserTest {
                     "APARTMENT THERAPY",
                     "SUITE DREAMS",
                     "APT STH",
-                    "APT SIDEX",
+                    "APT REARX",
                     "OFFICE TOWER",
+                    "TOWER HILL RD",
+                    "UNIT THE",
+                    "APT MAINE",
+                    "PH 555-1234",
                     "TOWER MAIN",
                     "PH 4165551234",
                     "PH 416-555-1234",
@@ -2451,6 +2455,67 @@ class AddressParserTest {
             assertThat(c.careOf()).isEmpty();
         }
 
+        @ParameterizedTest(name = "{0} under {1}")
+        @CsvSource(
+                delimiter = '|',
+                value = {
+                    "APT A 103 HIGHROAD SOUTH | 1234567 ONTARIO INC  | 103  | A",
+                    "UNIT B 2200 KINGSWAY     | 3M CANADA            | 2200 | B",
+                    "SUITE 300 THE QUEENSWAY  | 3M CANADA            | 300  |",
+                    "APT 394 QUEEN ST         | 1234567 ONTARIO INC  | 394  |",
+                    "APT 5 123 BROADWAY       | 9123-4567 QUÉBEC INC | 123  | 5"
+                })
+        @DisplayName("A name that starts with a digit is not taken for the street line")
+        void shouldReadStreetLineUnderNameThatStartsWithDigit(
+                String streetLine, String nameLine, String number, String unit) {
+            String region = "\nLONDON ON N5V 4M9";
+            var alone =
+                    parser.parseAddress("JOHN SMITH\n" + streetLine + region).components();
+            assertThat(alone.streetNumber()).isEqualTo(number);
+            assertThat(alone.unitNumber()).isEqualTo(unit == null ? "" : unit);
+            assertThat(alone.streetName()).isNotEmpty();
+
+            // The name line has no street type, so the line below it is read as it would be on its own
+            var c = parser.parseAddress(nameLine + "\n" + streetLine + region).components();
+            assertThat(c.streetNumber()).isEqualTo(alone.streetNumber());
+            assertThat(c.streetName()).isEqualTo(alone.streetName());
+            assertThat(c.streetType()).isEqualTo(alone.streetType());
+            assertThat(c.streetDirection()).isEqualTo(alone.streetDirection());
+            assertThat(c.unitNumber()).isEqualTo(alone.unitNumber());
+            assertThat(c.careOf()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Known limit: beside a street written without a street type, a mixed unit line still replaces it")
+        void shouldStillReplaceStreetWrittenWithoutType() {
+            // "2200 KINGSWAY" has no street type, so the parser is not sure it is the street and reads the next
+            // line the way it always did
+            var c = parser.parseAddress("JOHN SMITH\n2200 KINGSWAY\nAPT 3 BSMT\nVANCOUVER BC V5N 2T5")
+                    .components();
+            assertThat(c.streetNumber()).isEqualTo("3");
+            assertThat(c.unitNumber()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Known limit: a numbered company name is read as unit and street number")
+        void shouldStillReadNumberedCompanyAsUnit() {
+            // "9123-4567" looks like unit 9123 at number 4567. The street line then gives the real number, but
+            // the unit from the name line is kept over the unit line.
+            var c = parser.parseAddress("9123-4567 QUÉBEC INC\nAPP4\n123 RUE PRINCIPALE\nMONTRÉAL QC H3B 1A1")
+                    .components();
+            assertThat(c.streetNumber()).isEqualTo("123");
+            assertThat(c.unitNumber()).isEqualTo("9123");
+        }
+
+        @Test
+        @DisplayName("Known limit: a unit and the region alone on one line")
+        void shouldStillPutLoneUnitInMunicipalityOnSingleLine() {
+            var c = parser.parseAddress("APT A, TORONTO ON M5V 2Y7").components();
+            assertThat(c.municipality()).isEqualTo("APT A TORONTO");
+            assertThat(c.province()).isEqualTo("ON");
+            assertThat(c.postalCode()).isEqualTo("M5V 2Y7");
+        }
+
         @Test
         @DisplayName("A postal code on its own line does not make the municipality line a street line")
         void shouldNotCountRegionLineAsNumberedStreetLine() {
@@ -2460,6 +2525,13 @@ class AddressParserTest {
             assertThat(c.streetName()).isEqualTo("RD");
             assertThat(c.careOf()).isEmpty();
             assertThat(c.municipality()).isEqualTo("100 MILE HOUSE");
+
+            // The same when the municipality's name ends in a word that is also a street type (an invented place)
+            var park = parser.parseAddress("JOHN SMITH\nTOWER RD\n12 MILE PARK BC\nV0K 2E0")
+                    .components();
+            assertThat(park.streetName()).isEqualTo("RD");
+            assertThat(park.careOf()).isEmpty();
+            assertThat(park.municipality()).isEqualTo("12 MILE PARK");
         }
 
         @Test
