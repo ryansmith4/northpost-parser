@@ -2242,4 +2242,114 @@ class AddressParserTest {
             assertThat(result.components().streetNumber()).isEqualTo("5");
         }
     }
+
+    /**
+     * A unit written on a line of its own ("APT 4"). The field values for the many layouts are checked by
+     * {@link LayoutAddressTest}; the cases here cover what that file cannot express (the address type) and the limits
+     * of the rule.
+     */
+    @Nested
+    @DisplayName("Unit On Its Own Line")
+    class UnitOnOwnLineTests {
+
+        @Test
+        @DisplayName("Unit line after the street keeps the street number and the CIVIC type")
+        void shouldKeepStreetNumberWhenUnitLineFollows() {
+            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nAPT 4\nTORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("4");
+            assertThat(c.streetNumber()).isEqualTo("123");
+            assertThat(c.streetName()).isEqualTo("MAIN");
+            assertThat(c.addressType()).isEqualTo(AddressType.CIVIC);
+            assertThat(c.isComplete()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Unit line after a PO box does not turn the address into a civic one")
+        void shouldKeepPostalBoxTypeWhenUnitLineFollows() {
+            var c = parser.parseAddress("JOHN SMITH\nPO BOX 12\nSUITE 200\nTORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(c.addressType()).isEqualTo(AddressType.POSTAL_BOX);
+            assertThat(c.postalBoxNumber()).isEqualTo("12");
+            assertThat(c.unitNumber()).isEqualTo("200");
+            assertThat(c.streetNumber()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Unit line after a rural route does not turn the address into a civic one")
+        void shouldKeepRuralRouteTypeWhenUnitLineFollows() {
+            var c = parser.parseAddress("JOHN SMITH\nRR 2\nUNIT 5\nSTONY PLAIN AB T7Z 1X1")
+                    .components();
+            assertThat(c.addressType()).isEqualTo(AddressType.RURAL_ROUTE);
+            assertThat(c.ruralRoute()).isEqualTo("2");
+            assertThat(c.unitNumber()).isEqualTo("5");
+            assertThat(c.streetNumber()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("A unit line with no street line gives a unit and an incomplete address")
+        void shouldNotInventStreetNumberFromUnitLineAlone() {
+            var result = parser.parseAddress("JOHN SMITH\nAPT 4\nTORONTO ON M5V 2Y7");
+            var c = result.components();
+            assertThat(c.unitNumber()).isEqualTo("4");
+            assertThat(c.streetNumber()).isEmpty();
+            assertThat(c.addressType()).isEqualTo(AddressType.INCOMPLETE);
+            assertThat(c.isComplete()).isFalse();
+        }
+
+        @ParameterizedTest
+        @ValueSource(
+                strings = {
+                    "5-123 MAIN ST",
+                    "APT 5 123 MAIN ST",
+                    "APT5 123 MAIN ST",
+                    "123 MAIN ST APT 7",
+                    "5-123 MAIN ST SUITE 9",
+                    "100 KING ST W SUITE 500"
+                })
+        @DisplayName("A separate unit line changes nothing when the street line has its own unit")
+        void shouldIgnoreUnitLineWhenStreetLineHasUnit(String streetLine) {
+            var alone = parser.parseAddress("JOHN SMITH\n" + streetLine + "\nTORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(alone.unitNumber()).isNotEmpty();
+
+            for (String unitLine : List.of("APT 4", "APT4", "FLOOR 2", "SUITE B", "UNIT 4B", "APT 405-2")) {
+                var unitFirst = parser.parseAddress(
+                                "JOHN SMITH\n" + unitLine + "\n" + streetLine + "\nTORONTO ON M5V 2Y7")
+                        .components();
+                var unitLast = parser.parseAddress(
+                                "JOHN SMITH\n" + streetLine + "\n" + unitLine + "\nTORONTO ON M5V 2Y7")
+                        .components();
+                assertThat(unitFirst).as("%s before %s", unitLine, streetLine).isEqualTo(alone);
+                assertThat(unitLast).as("%s after %s", unitLine, streetLine).isEqualTo(alone);
+            }
+        }
+
+        @Test
+        @DisplayName("A unit word followed by a longer word is not a unit (TOWER RD)")
+        void shouldNotTakeWordAfterDesignatorAsUnit() {
+            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nTOWER RD\nTORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(c.unitNumber()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Known limit: two values after the unit word are not read as a unit line (APT 4 5)")
+        void shouldNotTakeTwoValuesAsUnitLine() {
+            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nAPT 4 5\nTORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("4");
+            assertThat(c.streetNumber()).isEqualTo("5");
+        }
+
+        @Test
+        @DisplayName("Known limit (#89): unit between commas on a single line joins the municipality")
+        void shouldNotYetReadUnitBetweenCommasOnSingleLine() {
+            var c = parser.parseAddress("123 MAIN ST, APT 4, TORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(c.unitNumber()).isEmpty();
+            assertThat(c.streetNumber()).isEqualTo("123");
+            assertThat(c.municipality()).isEqualTo("APT 4 TORONTO");
+        }
+    }
 }

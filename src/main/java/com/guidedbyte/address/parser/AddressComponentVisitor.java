@@ -753,6 +753,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
     private final AddressComponents.Builder builder = AddressComponents.builder();
 
+    /**
+     * True while the unit number in the builder came from a unit written on a line of its own ("APT 4"). A unit on the
+     * street line replaces such a unit; see {@link #loneUnitValue}.
+     */
+    private boolean unitFromOwnLine;
+
     public AddressComponentVisitor() {
         this(ParsingMode.LENIENT);
     }
@@ -1133,7 +1139,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // Plan 4: Check for concatenated unit+number (APT5, STE200, APT.5)
         UnitSplit unitSplit = tryExtractUnitPrefix(firstText);
         if (unitSplit != null) {
-            builder.unitNumber(unitSplit.unitNumber);
+            if (tokens.size() == 1) {
+                // "APT4" alone on a line: a unit written on a line of its own
+                recordUnitFromOwnLine(unitSplit.unitNumber);
+                return;
+            }
+            recordUnitFromStreetLine(unitSplit.unitNumber);
             // Continue parsing remaining tokens as civic line (skip first token)
             int idx = 1;
             if (idx < tokens.size()
@@ -1193,7 +1204,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 && tokens.get(0).type == CanadianAddressParser.NUMBER
                 && tokens.get(1).type == CanadianAddressParser.HYPHEN
                 && tokens.get(2).type == CanadianAddressParser.NUMBER) {
-            builder.unitNumber(tokens.get(0).text);
+            recordUnitFromStreetLine(tokens.get(0).text);
             builder.streetNumber(tokens.get(2).text);
             idx = 3;
             builder.addressType(AddressType.CIVIC);
@@ -1246,6 +1257,17 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         int idx = 1; // skip the designator
         if (idx >= tokens.size()) return;
 
+        // A line that holds only the designator and one value ("APT 4", "SUITE 200", "UNIT B") is a unit written
+        // on a line of its own. Record the unit and leave the street fields to the street line. Without this the
+        // look-ahead below finds no civic number after the value, takes the value as the civic number or street
+        // name, and overwrites what the street line set. A unit already found is kept: the street line's own unit
+        // ("123 MAIN ST APT 7") wins over a separate line, and of two separate lines the first wins.
+        String loneUnit = loneUnitValue(tokens);
+        if (loneUnit != null) {
+            recordUnitFromOwnLine(loneUnit);
+            return;
+        }
+
         // Try to coalesce adjacent compound tokens into a single unit value (1/2, 405-2, 1101.1)
         // A comma may separate the unit value from the civic number in the French form (APP 4, 123, RUE ...).
         CompoundResult compound = tryCoalesceAdjacentCompound(tokens, idx);
@@ -1255,7 +1277,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                     && (tokens.get(afterCompound).type == CanadianAddressParser.NUMBER
                             || tokens.get(afterCompound).type == CanadianAddressParser.ALPHANUMERIC);
             if (hasFollowingCivic) {
-                builder.unitNumber(compound.text);
+                recordUnitFromStreetLine(compound.text);
                 idx = afterCompound;
             }
             // else: no following civic — fall through to existing single-token logic
@@ -1271,12 +1293,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
             if (candidate.type == CanadianAddressParser.ALPHANUMERIC) {
                 // Digit-starting mixed token (5A, 2B) — always a unit identifier when designator is present
-                builder.unitNumber(candidate.text);
+                recordUnitFromStreetLine(candidate.text);
                 idx = afterCandidate;
             } else if ((candidate.type == CanadianAddressParser.WORD || candidate.type == CanadianAddressParser.NUMBER)
                     && hasFollowingCivic) {
                 // WORD or NUMBER followed by civic number → unit value (APT A 394, APT 5 394, APP 4, 123)
-                builder.unitNumber(candidate.text);
+                recordUnitFromStreetLine(candidate.text);
                 idx = afterCandidate;
             }
             // else: single NUMBER with no following civic → it IS the civic (APT 394 QUEEN ST)
@@ -1295,6 +1317,49 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Remaining: street name, type, direction
         interpretStreetTokens(tokens, idx);
+    }
+
+    /** Records a unit written on a line of its own, unless a unit has already been found. */
+    private void recordUnitFromOwnLine(String value) {
+        if (!builder.build().hasUnitNumber()) {
+            builder.unitNumber(value);
+            unitFromOwnLine = true;
+        }
+    }
+
+    /** Records a unit found on the street line. It replaces a unit that came from a line of its own. */
+    private void recordUnitFromStreetLine(String value) {
+        builder.unitNumber(value);
+        unitFromOwnLine = false;
+    }
+
+    /**
+     * Returns the unit value when a line consists of a unit designator followed by one value and nothing else, or null
+     * when the line holds anything more. The value is a number ({@code APT 4}), a code that mixes digits and letters
+     * ({@code UNIT 4B}, {@code SUITE B2}, {@code APT A-101}), a single letter ({@code APT A}), or two numbers joined
+     * without spaces ({@code APT 405-2}).
+     *
+     * <p>A longer word is not taken as a unit: {@code TOWER RD} and {@code OFFICE PARK} start with a designator word
+     * but are not units.
+     */
+    private static String loneUnitValue(List<TokenInfo> tokens) {
+        if (tokens.size() == 2) {
+            TokenInfo value = tokens.get(1);
+            if (value.type == CanadianAddressParser.NUMBER || value.type == CanadianAddressParser.ALPHANUMERIC) {
+                return value.text;
+            }
+            if (value.type == CanadianAddressParser.WORD) {
+                boolean singleLetter = value.text.length() == 1 && Character.isLetter(value.text.charAt(0));
+                boolean hasDigit = value.text.chars().anyMatch(Character::isDigit);
+                return singleLetter || hasDigit ? value.text : null;
+            }
+            return null;
+        }
+        CompoundResult compound = tryCoalesceAdjacentCompound(tokens, 1);
+        if (compound != null && 1 + compound.tokensConsumed == tokens.size()) {
+            return compound.text;
+        }
+        return null;
     }
 
     /**
@@ -1425,8 +1490,10 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         }
 
         // Plan 5: Detect trailing unit after street type (e.g., "MAIN ST APT 5")
-        // Only attempt if we haven't already extracted a unit number
-        if (!builder.build().hasUnitNumber() && words.size() >= 3) {
+        // Only attempt if we haven't already extracted a unit number on this line. A unit that came from a line
+        // of its own ("TOWER 2" above "100 KING ST W SUITE 500") does not stop the search: without it the trailing
+        // "SUITE 500" would be read as part of the street name. When one is found it replaces the earlier unit.
+        if ((!builder.build().hasUnitNumber() || unitFromOwnLine) && words.size() >= 3) {
             extractTrailingUnit(words);
         }
 
@@ -1478,7 +1545,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                     if (!unitNum.isEmpty()) unitNum.append(" ");
                     unitNum.append(words.get(i));
                 }
-                builder.unitNumber(unitNum.toString());
+                recordUnitFromStreetLine(unitNum.toString());
                 if (directionFound != null) {
                     builder.streetDirection(directionFound);
                 }
@@ -1496,7 +1563,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (afterType < words.size()) {
             UnitSplit split = tryExtractUnitPrefix(words.get(afterType));
             if (split != null) {
-                builder.unitNumber(split.unitNumber);
+                recordUnitFromStreetLine(split.unitNumber);
                 if (directionFound != null) {
                     builder.streetDirection(directionFound);
                 }
