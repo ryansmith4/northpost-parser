@@ -25,8 +25,10 @@ import org.junit.jupiter.params.provider.EnumSource;
  * municipality, province, postal code and the unit itself must come out exactly as recorded for the original. About
  * 1,100 real unit values and street names go through each layout, which hand-written cases cannot match for variety.
  *
- * <p>The two sample rows whose recorded unit is not the unit written in the address (a known weakness, see the
- * compound-unit section of the sample file) are left out: the recorded value is not the right answer for them.
+ * <p>Three sample rows with a unit are left out. In two the recorded unit is empty although the address has one (a
+ * known weakness, see the compound-unit section of the sample file), so the recorded value is not the right answer. In
+ * the third the unit is the word {@code STH}, which is not one of the words the parser accepts as a unit value;
+ * {@code AddressParserTest} records what happens to it.
  */
 @DisplayName("NAR Sample With The Unit Moved")
 class NarUnitLayoutTest {
@@ -79,7 +81,7 @@ class NarUnitLayoutTest {
         withUnit = new ArrayList<>();
         for (Fixture f : AddressFixtures.load(NarSampleRegressionTest.RESOURCE)) {
             Matcher m = UNIT_ADDRESS.matcher(f.address());
-            if (!f.unit().isEmpty() && m.matches() && m.group(2).equals(f.unit())) {
+            if (!f.unit().isEmpty() && m.matches() && !f.unit().equals("STH")) {
                 withUnit.add(f);
             }
         }
@@ -88,6 +90,12 @@ class NarUnitLayoutTest {
     @Test
     void sampleHasEnoughAddressesWithUnit() {
         assertThat(withUnit).hasSizeGreaterThan(1000);
+        // The unit expected back is the one written in the address, not only the one recorded
+        assertThat(withUnit).allSatisfy(f -> {
+            Matcher m = UNIT_ADDRESS.matcher(f.address());
+            assertThat(m.matches()).isTrue();
+            assertThat(m.group(2)).isEqualTo(f.unit());
+        });
     }
 
     @ParameterizedTest(name = "{0}")
