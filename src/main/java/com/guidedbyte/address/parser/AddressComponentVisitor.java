@@ -706,6 +706,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
     private static final Pattern ORDINAL = Pattern.compile("(\\d+)(ST|ND|RD|TH|E|ER|RE|EME|ÈME|IEME|IÈME)");
 
+    /** Digits and the letter E: a French ordinal ({@code 3E}) or a street number with a letter ({@code 20E}). */
+    private static final Pattern NUMBER_WITH_E = Pattern.compile("\\d+E");
+
     /** A number with more digits than this is a telephone number or an account number, not a unit. */
     private static final int LONGEST_UNIT_NUMBER = 6;
 
@@ -768,8 +771,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
      * True when a value has too many digits to be a unit: a number of more than {@link #LONGEST_UNIT_NUMBER} digits
      * anywhere in it, or, after {@code PH}, more than that many digits in all, because {@code PH 416-555-1234} is a
      * telephone number while {@code SUITE 1200-1201} is two suites. After any other unit word a hyphenated telephone
-     * number is still taken as the unit ({@code OFFICE 416-555-1234}): refusing it would hand the line back to the
-     * street-line reading, which overwrites the street.
+     * number is still taken as the unit ({@code OFFICE 416-555-1234}): when no other line is clearly the street,
+     * refusing it would hand the line back to the street-line reading, which overwrites the street.
      */
     private static boolean hasTooManyDigits(CharSequence value, String designator) {
         int total = 0;
@@ -1695,7 +1698,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
      * number, then at least one word ({@code UNIT 4 250 KING ST W}, {@code UNIT B 2200 KINGSWAY}, {@code APP 4, 123,
      * RUE PRINCIPALE}). Such a line is read as a street line whatever the other lines hold. A line with one number does
      * not qualify ({@code APT 3 BSMT}, {@code SUITE 3400 FIRST CANADIAN PLACE}, {@code APT 394 QUEEN ST}), and neither
-     * does one whose second number is an ordinal ({@code APT 5 3RD FLOOR REAR}).
+     * does one whose second number is an ordinal ({@code APT 5 3RD FLOOR REAR}). The street number must be set off from
+     * the unit by a space or a comma: {@code UNIT 4-250 KING ST W} does not qualify. Any line with two such numbers and
+     * a word qualifies, street or not ({@code RM 204 3 WEST WING}).
      *
      * <p>The unit value and the street number are found the way {@link #interpretCivicLineWithLeadingUnit} finds them.
      */
@@ -1720,11 +1725,19 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
-     * True for a token that can be a street number: a number, with letters or not ({@code 123A}), but not an ordinal.
+     * True for a token that can be a street number: a number, with letters or not ({@code 123A}, {@code 20E}), but not
+     * an ordinal ({@code 2ND}, {@code 1ER}, {@code 3EME}). A number with the single letter E can be either one. It is
+     * an ordinal when a floor word or a street type comes next ({@code 3E ÉTAGE}, {@code 12E AVENUE}), and a street
+     * number otherwise ({@code 20E MAPLE CRT}); the register has many street numbers that end in E.
      */
     private static boolean isStreetNumberToken(List<TokenInfo> tokens, int i) {
-        return isNumberToken(tokens, i)
-                && !ORDINAL.matcher(tokens.get(i).text.toUpperCase()).matches();
+        if (!isNumberToken(tokens, i)) return false;
+        String text = tokens.get(i).text.toUpperCase();
+        if (!ORDINAL.matcher(text).matches()) return true;
+        if (!NUMBER_WITH_E.matcher(text).matches()) return false;
+        if (i + 1 >= tokens.size()) return true;
+        String next = stripPeriod(tokens.get(i + 1).text.toUpperCase());
+        return !FLOOR_WORDS.contains(next) && !isStreetType(next);
     }
 
     /**
