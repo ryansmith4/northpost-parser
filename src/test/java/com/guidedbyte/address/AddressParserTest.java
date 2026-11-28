@@ -2706,6 +2706,25 @@ class AddressParserTest {
                     // PH written in the value already is not doubled
                     "APT PH04 123 MAIN ST        | PH04",
                     "PENTHOUSE PH2 123 MAIN ST   | PH2",
+                    // A unit word in front of another only introduces it, before or after the street
+                    "123 MAIN ST UNIT PH 4       | PH4",
+                    "123 MAIN ST UNIT PH. 4      | PH4",
+                    "123 MAIN ST UNIT PH 4B      | PH4B",
+                    "123 MAIN ST UNIT PH A       | PHA",
+                    "123 MAIN ST APT PENTHOUSE 4 | PH4",
+                    "123 MAIN ST APT FLOOR 2     | 2",
+                    "UNIT PH 4 123 MAIN ST       | PH4",
+                    "UNIT PH 4, 123 MAIN ST      | PH4",
+                    "UNIT PH A 123 MAIN ST       | PHA",
+                    "UNIT PH 4-2 123 MAIN ST     | PH4-2",
+                    "APT FLOOR 2 123 MAIN ST     | 2",
+                    // A unit word that is the whole value stays the value
+                    "APT PH 123 MAIN ST          | PH",
+                    "123 MAIN ST SUITE PH        | PH",
+                    "123 MAIN ST APT TOWER       | TOWER",
+                    // A value of two parts is not a unit word and its value
+                    "123 MAIN ST APT 12 B        | 12 B",
+                    "123 MAIN ST UNIT BSMT 2     | BSMT 2",
                     // The length of the value does not matter, joined or spaced
                     "APT1234567 123 MAIN ST      | 1234567",
                     "APT 1234567 123 MAIN ST     | 1234567"
@@ -2718,6 +2737,34 @@ class AddressParserTest {
             assertThat(c.streetName()).isEqualTo("MAIN");
             assertThat(c.streetType()).isEqualTo("ST");
             assertThat(c.careOf()).isEmpty();
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(
+                delimiter = '|',
+                value = {
+                    "APT PH 123 4 AVE SW      | PH | 123  | 4             | AVE",
+                    "APT PH 123 4TH AVE SW    | PH | 123  | 4TH           | AVE",
+                    "APT PH 4 123             | PH | 4    | 123           | ''",
+                    "APT PH 123 1ST NATIONS RD | PH | 123 | 1ST NATIONS   | RD",
+                    "APT PH 123 1/2 MAIN ST   | PH | 123 1/2 | MAIN       | ST",
+                    "APT BSMT 123 100 MILE RD | BSMT | 123 | 100 MILE     | RD",
+                    "UNIT PH UPPER 123 MAIN ST | '' | ''  | PH UPPER 123 MAIN | ST",
+                    "UNIT PH 4 123-125 MAIN ST | PH | 4   | 123-125 MAIN  | ST",
+                    "UNIT PH 4 123 RUE DUPONT | PH | 4    | 123 RUE DUPONT | ''"
+                })
+        @DisplayName("Two unit words at the start of a street line are read as before unless a value, a street "
+                + "number and a street name follow")
+        void shouldKeepUnitWordAsUnitBeforeNumberedStreet(
+                String line, String unit, String number, String name, String type) {
+            // The register writes the first rows as unit PH at 123 4 AVE SW. The last two rows are known limits:
+            // they mean penthouse 4 at 123-125 MAIN ST and at 123 RUE DUPONT, and are read as they were before.
+            var c = parser.parseAddress("JOHN SMITH\n" + line + "\nCALGARY AB T2P 1J9")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo(unit);
+            assertThat(c.streetNumber()).isEqualTo(number);
+            assertThat(c.streetName()).isEqualTo(name);
+            assertThat(c.streetType()).isEqualTo(type);
         }
 
         @ParameterizedTest(name = "{0}")

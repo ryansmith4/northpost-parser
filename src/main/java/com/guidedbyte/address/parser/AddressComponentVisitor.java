@@ -1389,6 +1389,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         int idx = 1; // skip the designator
         if (idx >= tokens.size()) return;
 
+        if (introducesSecondUnitWord(tokens)) {
+            // "UNIT PH 4 123 MAIN ST": the unit is the second unit word's
+            interpretCivicLineWithLeadingUnit(tokens.subList(1, tokens.size()));
+            return;
+        }
+
         String designator = tokens.get(0).text;
 
         // Try to coalesce adjacent compound tokens into a single unit value (1/2, 405-2, 1101.1)
@@ -1440,6 +1446,28 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Remaining: street name, type, direction
         interpretStreetTokens(tokens, idx);
+    }
+
+    /**
+     * True when the unit word a street line starts with only introduces a second one ({@code UNIT PH 4 123 MAIN ST}).
+     * The second unit word must be followed by a value, then a street number, then a word that is not a street type.
+     * The last test keeps {@code APT PH 123 4 AVE SW} as unit PH at 123 4 AVE SW, which is how the register's addresses
+     * read when the unit is a unit word and the street name is a number.
+     */
+    private boolean introducesSecondUnitWord(List<TokenInfo> tokens) {
+        if (tokens.size() < 3 || !isUnitDesignator(tokens.get(1).text.toUpperCase())) return false;
+
+        TokenInfo value = tokens.get(2);
+        boolean singleLetter = value.type == CanadianAddressParser.WORD
+                && value.text.length() == 1
+                && Character.isLetter(value.text.charAt(0));
+        if (!singleLetter && !isNumberToken(tokens, 2)) return false;
+
+        CompoundResult compound = tryCoalesceAdjacentCompound(tokens, 2);
+        int civic = skipCommas(tokens, compound == null ? 3 : 2 + compound.tokensConsumed);
+        if (!isStreetNumberToken(tokens, civic) || civic + 1 >= tokens.size()) return false;
+        TokenInfo next = tokens.get(civic + 1);
+        return next.type == CanadianAddressParser.WORD && !isStreetType(next.text.toUpperCase());
     }
 
     /**
@@ -1940,9 +1968,16 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (afterType + 1 < words.size()) {
             String possibleDesignator = words.get(afterType).toUpperCase();
             if (isUnitDesignator(possibleDesignator)) {
+                int valueFrom = afterType + 1;
+                if (valueFrom + 1 < words.size()
+                        && isUnitDesignator(words.get(valueFrom).toUpperCase())) {
+                    // "UNIT PH 4": the first unit word only introduces the second, as on a line of its own
+                    possibleDesignator = words.get(valueFrom).toUpperCase();
+                    valueFrom++;
+                }
                 // Collect remaining as unit number (could be "5", "5A", etc.)
                 StringBuilder unitNum = new StringBuilder();
-                for (int i = afterType + 1; i < words.size(); i++) {
+                for (int i = valueFrom; i < words.size(); i++) {
                     if (!unitNum.isEmpty()) unitNum.append(" ");
                     unitNum.append(words.get(i));
                 }
