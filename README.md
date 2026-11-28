@@ -116,7 +116,7 @@ With unit (multiple styles):  PO Box:
   5-456 ELM AVE                Rural Route:
   456 ELM AVE APT 5
   456 ELM AVE APT5
-                                  RR 2 STN MAIN
+  APT 5 (on its own line)         RR 2 STN MAIN
 Lettered avenue (SK/ON):       Fractional civic:
   402 AVENUE P S                  123 1/2 MAIN STREET
                                General Delivery:
@@ -192,6 +192,8 @@ This approach correctly handles addresses with or without an addressee line, reg
 |-------|-------|-------------|
 | `AddressParserTest` | Unit | About 200 tests across 20+ categories — civic, French, PO box, rural, lettered avenues, direction pairs, type disambiguation, hyphen/slash/ampersand preservation, edge cases, validation, batch, performance |
 | `OdaAddressTest` | Parameterized | About 150 curated addresses from Statistics Canada ODA datasets |
+| `LayoutAddressTest` | Parameterized | Hand-written addresses that vary the layout, such as a unit on a line of its own. The bulk datasets use one layout, so they cannot catch these |
+| `NarUnitLayoutTest` | Parameterized | The NAR sample addresses that have a unit, rewritten with the unit on its own line or between commas; the same fields must come back |
 | `NarSampleRegressionTest` | Parameterized | About 2,400 NAR addresses from all 13 provinces and territories plus known-hard patterns, replayed against the parser's recorded output (one test per province) |
 
 ### NAR Regression Sample
