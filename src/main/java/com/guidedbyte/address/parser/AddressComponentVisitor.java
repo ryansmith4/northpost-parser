@@ -709,8 +709,11 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     /** Digits and the letter E: a French ordinal ({@code 3E}) or a street number with a letter ({@code 20E}). */
     private static final Pattern NUMBER_WITH_E = Pattern.compile("\\d+E");
 
-    /** A number with more digits than this is a telephone number or an account number, not a unit. */
-    private static final int LONGEST_UNIT_NUMBER = 6;
+    /**
+     * Unit words that are part of the unit itself: penthouse 12 is a different unit from unit 12, so the value is
+     * recorded with {@code PH} in front. The register writes penthouse units the same way ({@code PH04}).
+     */
+    private static final Set<String> PENTHOUSE_WORDS = Set.of("PH", "PENTHOUSE");
 
     /**
      * Words that are unit values in the National Address Register, with their spelled-out forms. With the other forms
@@ -768,27 +771,15 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     }
 
     /**
-     * True when a value has too many digits to be a unit: a number of more than {@link #LONGEST_UNIT_NUMBER} digits
-     * anywhere in it, or, after {@code PH}, more than that many digits in all, because {@code PH 416-555-1234} is a
-     * telephone number while {@code SUITE 1200-1201} is two suites. After any other unit word a hyphenated telephone
-     * number is still taken as the unit ({@code OFFICE 416-555-1234}): when no other line is clearly the street,
-     * refusing it would hand the line back to the street-line reading, which overwrites the street.
+     * Returns the unit as it is recorded: the value as written, or with {@code PH} in front when the unit word is a
+     * penthouse word ({@code PH 12}, {@code PH12} and {@code PENTHOUSE 12} all give {@code PH12}). A value that already
+     * starts with {@code PH} is left as it is ({@code PENTHOUSE PH2}).
+     *
+     * @param designator the unit word the value followed, or null when there was none
      */
-    private static boolean hasTooManyDigits(CharSequence value, String designator) {
-        int total = 0;
-        int run = 0;
-        int longestRun = 0;
-        for (int i = 0; i < value.length(); i++) {
-            if (Character.isDigit(value.charAt(i))) {
-                total++;
-                run++;
-                longestRun = Math.max(longestRun, run);
-            } else {
-                run = 0;
-            }
-        }
-        boolean afterPh = stripPeriod(designator.toUpperCase()).equals("PH");
-        return longestRun > LONGEST_UNIT_NUMBER || (afterPh && total > LONGEST_UNIT_NUMBER);
+    private static String unitAsRecorded(String value, String designator) {
+        boolean penthouse = designator != null && PENTHOUSE_WORDS.contains(stripPeriod(designator.toUpperCase()));
+        return penthouse && !value.toUpperCase().startsWith("PH") ? "PH" + value : value;
     }
 
     /** Designators sorted by length descending for longest-match-first (Plan 4) */
@@ -1284,7 +1275,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Plan 4: Check for concatenated unit+number (APT5, STE200, APT.5)
         UnitSplit unitSplit = tryExtractUnitPrefix(firstText);
-        if (unitSplit != null && !hasTooManyDigits(unitSplit.unitNumber, unitSplit.designator)) {
+        if (unitSplit != null) {
             recordUnitFromStreetLine(unitSplit.unitNumber, unitSplit.designator);
             // Continue parsing remaining tokens as civic line (skip first token)
             int idx = 1;
@@ -1464,7 +1455,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         boolean buildingPart = isBuildingPartDesignator(designator);
         boolean replacesBuildingPart = unitIsBuildingPart && !buildingPart;
         if (!builder.build().hasUnitNumber() || replacesBuildingPart) {
-            builder.unitNumber(value);
+            builder.unitNumber(unitAsRecorded(value, designator));
             unitFromOwnLine = true;
             unitIsBuildingPart = buildingPart;
         }
@@ -1482,7 +1473,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         if (unitFromOwnLine && !unitIsBuildingPart && buildingPart) {
             return;
         }
-        builder.unitNumber(value);
+        builder.unitNumber(unitAsRecorded(value, designator));
         unitFromOwnLine = false;
         unitIsBuildingPart = buildingPart;
     }
@@ -1545,7 +1536,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             if (!isUnitDesignator(word)) {
                 // "APT4": unit word and value written together
                 UnitSplit joined = tryExtractUnitPrefix(word);
-                if (joined == null || hasTooManyDigits(joined.unitNumber(), joined.designator())) return null;
+                if (joined == null) return null;
                 parts.add(new UnitPart(joined.designator(), stripTrailingDots(joined.unitNumber())));
                 i++;
                 continue;
@@ -1574,7 +1565,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
             }
 
             String value = unitValue(tokens, valueStart, valueEnd, wordValueAllowed);
-            if (value == null || hasTooManyDigits(value, word)) return null;
+            if (value == null) return null;
             parts.add(new UnitPart(word, value));
             i = valueEnd;
         }
@@ -1627,8 +1618,7 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 && (end == 1 || areAdjacent(tokens.get(end - 1), tokens.get(end)))) {
             end++;
         }
-        String value = end > 1 ? unitValue(tokens, 1, end, false) : null;
-        return value == null || hasTooManyDigits(value, tokens.get(0).text) ? null : value;
+        return end > 1 ? unitValue(tokens, 1, end, false) : null;
     }
 
     /**
@@ -1638,7 +1628,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
      * must contain a digit or be a single letter. After it the value may go on with a single letter ({@code 12 B}) or
      * with a hyphen or slash standing alone and one more group ({@code 405 - 2}, read as {@code 405-2}). A second
      * number after a space ends the value: in {@code APT 6 1236 4E-ET-5E-RANG} the 1236 is the street number, so that
-     * line is not a unit line. The caller checks the length; see {@link #hasTooManyDigits}.
+     * line is not a unit line. The length is not checked: a telephone number written after a unit word is returned as
+     * the unit ({@code OFFICE 416-555-1234}), which leaves the street alone.
      *
      * @param wordValueAllowed whether a single word from {@link #isUnitValueWord} is accepted ({@code BSMT})
      */
