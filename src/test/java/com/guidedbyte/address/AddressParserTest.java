@@ -2554,17 +2554,27 @@ class AddressParserTest {
             assertThat(c.streetName()).isEqualTo(name);
         }
 
-        @ParameterizedTest
-        @ValueSource(strings = {"UNIT 4-250 KING ST W", "UNIT 4 - 250 KING ST W", "UNIT 12 B 250 KING ST W"})
-        @DisplayName(
-                "Known limit: a street number joined to the unit, or after a two-part unit, does not make a street line")
-        void shouldStillSetAsideLineWhoseStreetNumberIsNotSetOff(String line) {
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(
+                delimiter = '|',
+                value = {
+                    "UNIT 4-250 KING ST W    | 4-250 | ''",
+                    "UNIT 4 - 250 KING ST W  | 4     | ''",
+                    "UNIT 4 (250) KING ST W  | 4     | ''",
+                    "UNIT 12 B 250 KING ST W | 12    | ''",
+                    // With two unit words the line gives nothing and is kept as care-of
+                    "UNIT PH A 250 KING ST W | ''    | UNIT PH A 250 KING ST W"
+                })
+        @DisplayName("Known limit: a street number joined to the unit, in parentheses, after a two-part unit or after "
+                + "two unit words does not make a street line")
+        void shouldStillSetAsideLineWhoseStreetNumberIsNotSetOff(String line, String unit, String careOf) {
             // Under a business name that reads like a street, the line gives only its unit
             var c = parser.parseAddress("24 HOUR PET CENTRE\n" + line + "\nKITCHENER ON N2G 1B6")
                     .components();
             assertThat(c.streetNumber()).isEqualTo("24");
             assertThat(c.streetName()).isEqualTo("HOUR PET");
-            assertThat(c.unitNumber()).isNotEmpty();
+            assertThat(c.unitNumber()).isEqualTo(unit);
+            assertThat(c.careOf()).isEqualTo(careOf);
         }
 
         @Test
@@ -2706,22 +2716,26 @@ class AddressParserTest {
                     // PH written in the value already is not doubled
                     "APT PH04 123 MAIN ST        | PH04",
                     "PENTHOUSE PH2 123 MAIN ST   | PH2",
-                    // A unit word in front of another only introduces it, before or after the street
+                    // The value may hold a letter, and the unit may be joined to its word after the street
+                    "PH 2B 123 MAIN ST           | PH2B",
+                    "PH B. 123 MAIN ST           | PHB.",
+                    "123 MAIN ST PH12            | PH12",
+                    // After the street, a unit word in front of another only introduces it
                     "123 MAIN ST UNIT PH 4       | PH4",
                     "123 MAIN ST UNIT PH. 4      | PH4",
                     "123 MAIN ST UNIT PH 4B      | PH4B",
                     "123 MAIN ST UNIT PH A       | PHA",
                     "123 MAIN ST APT PENTHOUSE 4 | PH4",
                     "123 MAIN ST APT FLOOR 2     | 2",
-                    "UNIT PH 4 123 MAIN ST       | PH4",
-                    "UNIT PH 4, 123 MAIN ST      | PH4",
-                    "UNIT PH A 123 MAIN ST       | PHA",
-                    "UNIT PH 4-2 123 MAIN ST     | PH4-2",
-                    "APT FLOOR 2 123 MAIN ST     | 2",
-                    // A unit word that is the whole value stays the value
+                    // A penthouse word written first stays the unit word
+                    "123 MAIN ST PENTHOUSE SUITE 4 | PH4",
+                    "123 MAIN ST PH UNIT 4       | PH4",
+                    // A unit word that is the whole value stays the value, and PH is not put in front of a word
                     "APT PH 123 MAIN ST          | PH",
                     "123 MAIN ST SUITE PH        | PH",
                     "123 MAIN ST APT TOWER       | TOWER",
+                    "PH APT 123 MAIN ST          | APT",
+                    "PENTHOUSE LEVEL 123 MAIN ST | LEVEL",
                     // A value of two parts is not a unit word and its value
                     "123 MAIN ST APT 12 B        | 12 B",
                     "123 MAIN ST UNIT BSMT 2     | BSMT 2",
@@ -2749,16 +2763,24 @@ class AddressParserTest {
                     "APT PH 123 1ST NATIONS RD | PH | 123 | 1ST NATIONS   | RD",
                     "APT PH 123 1/2 MAIN ST   | PH | 123 1/2 | MAIN       | ST",
                     "APT BSMT 123 100 MILE RD | BSMT | 123 | 100 MILE     | RD",
+                    "APT PH 123 100 MILE RD   | PH | 123  | 100 MILE      | RD",
+                    "APT APT 123 100 MILE RD  | APT | 123 | 100 MILE      | RD",
+                    "APT OFFICE 123 4 AVE SW  | OFFICE | 123 | 4          | AVE",
+                    // Known limits: these mean penthouse 4 at number 123
+                    "UNIT PH 4 123 MAIN ST    | PH | 4    | 123 MAIN      | ST",
+                    "UNIT PH 4, 123 MAIN ST   | PH | 4    | 123 MAIN      | ST",
+                    "PENTHOUSE SUITE 4 123 MAIN ST | SUITE | 4 | 123 MAIN | ST",
                     "UNIT PH UPPER 123 MAIN ST | '' | ''  | PH UPPER 123 MAIN | ST",
                     "UNIT PH 4 123-125 MAIN ST | PH | 4   | 123-125 MAIN  | ST",
                     "UNIT PH 4 123 RUE DUPONT | PH | 4    | 123 RUE DUPONT | ''"
                 })
-        @DisplayName("Two unit words at the start of a street line are read as before unless a value, a street "
-                + "number and a street name follow")
+        @DisplayName("Known limit: two unit words at the start of a street line are read as before")
         void shouldKeepUnitWordAsUnitBeforeNumberedStreet(
                 String line, String unit, String number, String name, String type) {
-            // The register writes the first rows as unit PH at 123 4 AVE SW. The last two rows are known limits:
-            // they mean penthouse 4 at 123-125 MAIN ST and at 123 RUE DUPONT, and are read as they were before.
+            // The second word is taken as the unit and the first number as the street number. That is right when
+            // the unit is a unit word and the street name starts with a number (the register has units APT and
+            // OFFICE, and streets such as 100 MILE RD). It is wrong for "UNIT PH 4 123 MAIN ST"; the two cannot be
+            // told apart from the words alone.
             var c = parser.parseAddress("JOHN SMITH\n" + line + "\nCALGARY AB T2P 1J9")
                     .components();
             assertThat(c.unitNumber()).isEqualTo(unit);
@@ -2780,6 +2802,8 @@ class AddressParserTest {
                     "UNIT PH        | PH",
                     "APT PH04       | PH04",
                     "PH 12, FLOOR 9 | PH12",
+                    "PENTHOUSE SUITE 4 | PH4",
+                    "PH UNIT 4      | PH4",
                     "APT 12         | 12"
                 })
         @DisplayName("On a line of its own a penthouse word stays in the unit, before or after the street line")
@@ -2810,7 +2834,15 @@ class AddressParserTest {
                     "APT 204 BUZZER 1234             | 204",
                     "APT 204, BUZZ 1234              | 204",
                     "APT 204 (BUZZER 1234)           | 204",
-                    "SUITE 3400 FIRST CANADIAN PLACE | 3400"
+                    "SUITE 3400 FIRST CANADIAN PLACE | 3400",
+                    "APT 1234567 REAR DOOR           | 1234567",
+                    "PH 2 ROOF                       | PH2",
+                    // The same with the unit joined to its word
+                    "APT204 BUZZER 1234              | 204",
+                    "APT4 REAR DOOR                  | 4",
+                    "APT1234567 BUZZER 12            | 1234567",
+                    "SUITE3400 FIRST CANADIAN PLACE  | 3400",
+                    "PH4165551234 EXT 5              | PH4165551234"
                 })
         @DisplayName("Known limit: beside a clear street line, the text after the unit on a unit line is discarded")
         void shouldStillDiscardTextAfterUnitOnUnitLine(String line, String unit) {
@@ -2822,6 +2854,125 @@ class AddressParserTest {
             assertThat(c.streetNumber()).isEqualTo("123");
             assertThat(c.streetName()).isEqualTo("MAIN");
             assertThat(c.careOf()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("A joined unit followed by a street number is still a street line beside another street line")
+        void shouldReadJoinedUnitWithStreetNumberAsStreetLine() {
+            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\nAPT4 250 KING ST W" + CITY_LINE)
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("4");
+            assertThat(c.streetNumber()).isEqualTo("250");
+            assertThat(c.streetName()).isEqualTo("KING");
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(
+                delimiter = '|',
+                value = {
+                    "APT 5 3E FLOOR      | 5",
+                    "APT 5 3E FLR.       | 5",
+                    "APP 4 14E. FLOOR    | 4",
+                    "UNIT A 18E - ETAGE  | A",
+                    "APT 5 12E AVE       | 5",
+                    "APT 5 12E AVENUE O  | 5",
+                    "APT 5 12E AVE O.    | 5",
+                    "APT 5 12E AVE,      | 5",
+                    "UNIT A 37E, AVENUE  | A",
+                    "APT 5 3E FLR. NORTH WING | 5"
+                })
+        @DisplayName("A number ending in E is an ordinal before a floor word or a lone street type, with or without "
+                + "punctuation between them")
+        void shouldReadNumberEndingInEAsOrdinalBeforeFloorWordOrLoneStreetType(String line, String unit) {
+            // The line gives no street number of its own, so beside a clear street line it only gives its unit
+            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\n" + line + CITY_LINE)
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo(unit);
+            assertThat(c.streetNumber()).isEqualTo("123");
+            assertThat(c.streetName()).isEqualTo("MAIN");
+        }
+
+        @ParameterizedTest(name = "{0} / {1}")
+        @CsvSource(
+                delimiter = '|',
+                value = {
+                    "20E ST CLAIR AVE W | APT 3 BSMT                 | 3 | 20E  | ST CLAIR | AVE",
+                    "5E MAPLE CRT       | APT 3 BSMT                 | 3 | 5E   | MAPLE    | CRT",
+                    "20E ST CLAIR AVE. W | APT 3 BSMT                | 3 | 20E  | ST CLAIR | AVE",
+                    "24 HOUR PET CENTRE | UNIT 4 250E ST CLAIR AVE W | 4 | 250E | ST CLAIR | AVE",
+                    "4735E RUE PRINCIPALE  | APT 3 BSMT              | 3 | 4735E | PRINCIPALE | RUE",
+                    "4735E, RUE PRINCIPALE | APT 3 BSMT              | 3 | 4735E | PRINCIPALE | RUE",
+                    "24 HOUR PET CENTRE | APP 4 4735E, RUE PRINCIPALE | 4 | 4735E | PRINCIPALE | RUE"
+                })
+        @DisplayName("A number ending in E is a street number when a name follows the street-type word")
+        void shouldReadNumberEndingInEAsStreetNumberWhenStreetTypeComesLater(
+                String first, String second, String unit, String number, String name, String type) {
+            // ST is in the street-type list, but in "250E ST CLAIR AVE W" it is part of the name. In a French
+            // street the name comes after the type.
+            var c = parser.parseAddress(first + "\n" + second + "\nTORONTO ON M4V 1L5")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo(unit);
+            assertThat(c.streetNumber()).isEqualTo(number);
+            assertThat(c.streetName()).isEqualTo(name);
+            assertThat(c.streetType()).isEqualTo(type);
+        }
+
+        @Test
+        @DisplayName("Known limit: a penthouse unit before the street number with a hyphen takes the number with it")
+        void shouldStillLoseStreetNumberAfterPenthouseUnitWithHyphen() {
+            // Canada Post's "unit-number street" form works only for a unit of digits; see issue #93
+            var c = parser.parseAddress("JOHN SMITH\nPH01-2511 BLOOR ST W\nTORONTO ON M6S 5A6")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("PH01-2511");
+            assertThat(c.streetNumber()).isEmpty();
+            assertThat(c.streetName()).isEqualTo("BLOOR");
+        }
+
+        @Test
+        @DisplayName("Known limit: a range of street numbers is read as unit and number, and that unit is kept")
+        void shouldStillKeepUnitReadFromRangeOfStreetNumbers() {
+            // Main returned unit 710D here, because a unit line used to overwrite the unit. Worse than main.
+            var c = parser.parseAddress("JOHN SMITH\n1236-1238 QUEEN PL N\nRM 710D" + CITY_LINE)
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("1236");
+            assertThat(c.streetNumber()).isEqualTo("1238");
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(
+                delimiter = '|',
+                value = {"PH 7 SALON | PH7", "UNIT 4 MEDIA INC | 4"})
+        @DisplayName("Known limit: a business name that starts with a unit word and a number gives a unit")
+        void shouldStillReadUnitFromBusinessNameThatStartsWithUnitWord(String name, String unit) {
+            // Main returned no unit. Worse than main.
+            var c = parser.parseAddress(name + "\n965 DES RIVIERES RTE\nLEVIS QC G6V 1A1")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo(unit);
+            assertThat(c.streetNumber()).isEqualTo("965");
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(
+                delimiter = '|',
+                value = {"OFFICE 416 555 1234 | 416 | ''", "OFFICE (416) 555-1234 | '' | OFFICE ( 416 ) 555 - 1234"})
+        @DisplayName("Known limit: a telephone number written with spaces or parentheses is not returned whole")
+        void shouldStillSplitTelephoneNumberWrittenWithSpaces(String line, String unit, String careOf) {
+            var c = parser.parseAddress("JOHN SMITH\n123 MAIN ST\n" + line + CITY_LINE)
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo(unit);
+            assertThat(c.careOf()).isEqualTo(careOf);
+            assertThat(c.streetNumber()).isEqualTo("123");
+            assertThat(c.streetName()).isEqualTo("MAIN");
+        }
+
+        @Test
+        @DisplayName("A long unit joined to its word is read between commas on a single line")
+        void shouldReadLongJoinedUnitBetweenCommas() {
+            var c = parser.parseAddress("123 MAIN ST, APT1234567, TORONTO ON M5V 2Y7")
+                    .components();
+            assertThat(c.unitNumber()).isEqualTo("1234567");
+            assertThat(c.streetNumber()).isEqualTo("123");
+            assertThat(c.municipality()).isEqualTo("TORONTO");
         }
 
         @ParameterizedTest(name = "{0}")

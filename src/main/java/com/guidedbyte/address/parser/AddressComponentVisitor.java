@@ -773,13 +773,24 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
     /**
      * Returns the unit as it is recorded: the value as written, or with {@code PH} in front when the unit word is a
      * penthouse word ({@code PH 12}, {@code PH12} and {@code PENTHOUSE 12} all give {@code PH12}). A value that already
-     * starts with {@code PH} is left as it is ({@code PENTHOUSE PH2}).
+     * starts with {@code PH} is left as it is ({@code PENTHOUSE PH2}). So is a value that is a word: {@code PH} goes
+     * only in front of a value with a digit or of a single letter, so {@code PH APT 123 MAIN ST} does not give
+     * {@code PHAPT}.
      *
      * @param designator the unit word the value followed, or null when there was none
      */
     private static String unitAsRecorded(String value, String designator) {
-        boolean penthouse = designator != null && PENTHOUSE_WORDS.contains(stripPeriod(designator.toUpperCase()));
-        return penthouse && !value.toUpperCase().startsWith("PH") ? "PH" + value : value;
+        if (designator == null
+                || !isPenthouseWord(designator)
+                || value.toUpperCase().startsWith("PH")) return value;
+        String letter = stripTrailingDots(value);
+        boolean singleLetter = letter.length() == 1 && Character.isLetter(letter.charAt(0));
+        boolean hasDigit = value.chars().anyMatch(Character::isDigit);
+        return singleLetter || hasDigit ? "PH" + value : value;
+    }
+
+    private static boolean isPenthouseWord(String word) {
+        return PENTHOUSE_WORDS.contains(stripPeriod(word.toUpperCase()));
     }
 
     /** Designators sorted by length descending for longest-match-first (Plan 4) */
@@ -1276,6 +1287,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         // Plan 4: Check for concatenated unit+number (APT5, STE200, APT.5)
         UnitSplit unitSplit = tryExtractUnitPrefix(firstText);
         if (unitSplit != null) {
+            if (addressHasNumberedStreetLine && !startsWithStreetNumberAndWord(tokens, 1)) {
+                // "APT204 BUZZER 1234" beside a line that is clearly the street: as for "APT 204 BUZZER 1234",
+                // keep the unit and leave the street fields alone
+                recordUnitFromOwnLine(unitSplit.unitNumber, unitSplit.designator);
+                return;
+            }
             recordUnitFromStreetLine(unitSplit.unitNumber, unitSplit.designator);
             // Continue parsing remaining tokens as civic line (skip first token)
             int idx = 1;
@@ -1389,12 +1406,6 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         int idx = 1; // skip the designator
         if (idx >= tokens.size()) return;
 
-        if (introducesSecondUnitWord(tokens)) {
-            // "UNIT PH 4 123 MAIN ST": the unit is the second unit word's
-            interpretCivicLineWithLeadingUnit(tokens.subList(1, tokens.size()));
-            return;
-        }
-
         String designator = tokens.get(0).text;
 
         // Try to coalesce adjacent compound tokens into a single unit value (1/2, 405-2, 1101.1)
@@ -1446,28 +1457,6 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // Remaining: street name, type, direction
         interpretStreetTokens(tokens, idx);
-    }
-
-    /**
-     * True when the unit word a street line starts with only introduces a second one ({@code UNIT PH 4 123 MAIN ST}).
-     * The second unit word must be followed by a value, then a street number, then a word that is not a street type.
-     * The last test keeps {@code APT PH 123 4 AVE SW} as unit PH at 123 4 AVE SW, which is how the register's addresses
-     * read when the unit is a unit word and the street name is a number.
-     */
-    private boolean introducesSecondUnitWord(List<TokenInfo> tokens) {
-        if (tokens.size() < 3 || !isUnitDesignator(tokens.get(1).text.toUpperCase())) return false;
-
-        TokenInfo value = tokens.get(2);
-        boolean singleLetter = value.type == CanadianAddressParser.WORD
-                && value.text.length() == 1
-                && Character.isLetter(value.text.charAt(0));
-        if (!singleLetter && !isNumberToken(tokens, 2)) return false;
-
-        CompoundResult compound = tryCoalesceAdjacentCompound(tokens, 2);
-        int civic = skipCommas(tokens, compound == null ? 3 : 2 + compound.tokensConsumed);
-        if (!isStreetNumberToken(tokens, civic) || civic + 1 >= tokens.size()) return false;
-        TokenInfo next = tokens.get(civic + 1);
-        return next.type == CanadianAddressParser.WORD && !isStreetType(next.text.toUpperCase());
     }
 
     /**
@@ -1544,6 +1533,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
         int end = countWithoutTrailingCommas(tokens);
 
         List<UnitPart> parts = new ArrayList<>();
+        // A penthouse word that introduced the next unit word ("PENTHOUSE SUITE 4"); it stays the unit word
+        String penthouseAhead = null;
         int i = 0;
         while (i < end) {
             TokenInfo t = tokens.get(i);
@@ -1583,6 +1574,9 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 if (!unitWordFollows) return null;
                 if (valueStart < end - 1) {
                     // "APT PH 2": the first unit word only introduces the second
+                    if (isPenthouseWord(word)) {
+                        penthouseAhead = word;
+                    }
                     i = valueStart;
                     continue;
                 }
@@ -1594,7 +1588,8 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
             String value = unitValue(tokens, valueStart, valueEnd, wordValueAllowed);
             if (value == null) return null;
-            parts.add(new UnitPart(word, value));
+            parts.add(new UnitPart(penthouseAhead != null ? penthouseAhead : word, value));
+            penthouseAhead = null;
             i = valueEnd;
         }
         return parts.isEmpty() ? null : parts;
@@ -1729,7 +1724,12 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
         // The unit value is one token, or several written together ("405-2")
         CompoundResult compound = tryCoalesceAdjacentCompound(tokens, 1);
-        int civic = skipCommas(tokens, compound == null ? 2 : 1 + compound.tokensConsumed);
+        return startsWithStreetNumberAndWord(tokens, compound == null ? 2 : 1 + compound.tokensConsumed);
+    }
+
+    /** True when the tokens from {@code from}, after any commas, are a street number and, somewhere later, a word. */
+    private boolean startsWithStreetNumberAndWord(List<TokenInfo> tokens, int from) {
+        int civic = skipCommas(tokens, from);
         if (!isStreetNumberToken(tokens, civic)) return false;
         for (int i = civic + 1; i < tokens.size(); i++) {
             if (tokens.get(i).type == CanadianAddressParser.WORD) return true;
@@ -1745,18 +1745,41 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
 
     /**
      * True for a token that can be a street number: a number, with letters or not ({@code 123A}, {@code 20E}), but not
-     * an ordinal ({@code 2ND}, {@code 1ER}, {@code 3EME}). A number with the single letter E can be either one. It is
-     * an ordinal when a floor word or a street type comes next ({@code 3E ÉTAGE}, {@code 12E AVENUE}), and a street
-     * number otherwise ({@code 20E MAPLE CRT}); the register has many street numbers that end in E.
+     * an ordinal ({@code 2ND}, {@code 1ER}, {@code 3EME}). A number with the single letter E can be either one; the
+     * register has 4,063 street numbers that end in E. It is an ordinal when a floor word comes next ({@code 3E ÉTAGE},
+     * {@code 14E. FLOOR}), or a street type with nothing after it but a direction ({@code 12E AVENUE}, {@code 12E
+     * AVENUE O}). It is a street number otherwise: {@code 20E MAPLE CRT}; {@code 250E ST CLAIR AVE W}, where {@code ST}
+     * is part of the name; and {@code 4735E RUE PRINCIPALE}, where the name follows the street type.
      */
     private static boolean isStreetNumberToken(List<TokenInfo> tokens, int i) {
         if (!isNumberToken(tokens, i)) return false;
         String text = tokens.get(i).text.toUpperCase();
         if (!ORDINAL.matcher(text).matches()) return true;
         if (!NUMBER_WITH_E.matcher(text).matches()) return false;
-        if (i + 1 >= tokens.size()) return true;
-        String next = stripPeriod(tokens.get(i + 1).text.toUpperCase());
-        return !FLOOR_WORDS.contains(next) && !isStreetType(next);
+
+        // A period, comma or hyphen may stand between the number and the word ("14E. FLOOR", "18E - ETAGE")
+        int next = i + 1;
+        while (next < tokens.size() && isPunctuation(tokens.get(next))) {
+            next++;
+        }
+        if (next >= tokens.size()) return true;
+        String word = stripPeriod(tokens.get(next).text.toUpperCase());
+        if (FLOOR_WORDS.contains(word)) return false;
+        if (!isStreetType(word)) return true;
+        // The street type ends the street, but for a direction: the number is the street's own ordinal. A name after
+        // the type word means a street number in front of a street ("250E ST CLAIR AVE W", "4735E RUE PRINCIPALE").
+        for (int later = next + 1; later < tokens.size(); later++) {
+            TokenInfo t = tokens.get(later);
+            if (isPunctuation(t)) continue;
+            if (!DIRECTIONS.contains(stripPeriod(t.text.toUpperCase()))) return true;
+        }
+        return false;
+    }
+
+    private static boolean isPunctuation(TokenInfo token) {
+        return token.type == CanadianAddressParser.DOT
+                || token.type == CanadianAddressParser.COMMA
+                || token.type == CanadianAddressParser.HYPHEN;
     }
 
     /**
@@ -1971,8 +1994,11 @@ public class AddressComponentVisitor extends CanadianAddressBaseVisitor<AddressC
                 int valueFrom = afterType + 1;
                 if (valueFrom + 1 < words.size()
                         && isUnitDesignator(words.get(valueFrom).toUpperCase())) {
-                    // "UNIT PH 4": the first unit word only introduces the second, as on a line of its own
-                    possibleDesignator = words.get(valueFrom).toUpperCase();
+                    // "UNIT PH 4": the first unit word only introduces the second, as on a line of its own.
+                    // A penthouse word written first stays the unit word ("PENTHOUSE SUITE 4" is PH4).
+                    if (!isPenthouseWord(possibleDesignator)) {
+                        possibleDesignator = words.get(valueFrom).toUpperCase();
+                    }
                     valueFrom++;
                 }
                 // Collect remaining as unit number (could be "5", "5A", etc.)

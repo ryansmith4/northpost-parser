@@ -174,7 +174,7 @@ JOHN SMITH\n123 MAIN ST\nAPT BSMT.\nTORONTO ON M5V 2Y7|123|MAIN|ST||BSMT|TORONTO
 # A long number is a unit like any other: the length of a value is not checked
 JOHN SMITH\n123 MAIN ST\nAPT 123456\nTORONTO ON M5V 2Y7|123|MAIN|ST||123456|TORONTO|ON|M5V 2Y7
 JOHN SMITH\n123 MAIN ST\nAPT 1 / 2\nTORONTO ON M5V 2Y7|123|MAIN|ST||1/2|TORONTO|ON|M5V 2Y7
-# Two suites: each number is within the limit
+# Two suites on one unit line
 JOHN SMITH\n123 MAIN ST\nSUITE 1200-1201\nTORONTO ON M5V 2Y7|123|MAIN|ST||1200-1201|TORONTO|ON|M5V 2Y7
 
 # === Which words are a floor, building, tower or department (a unit proper is kept over each) ===
